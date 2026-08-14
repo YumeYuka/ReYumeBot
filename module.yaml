@@ -1,0 +1,15 @@
+product: windows/app
+
+settings:
+  kotlin:
+    serialization: json
+  ktor: enabled
+  native:
+    entryPoint: main
+
+dependencies:
+  - $ktor.client.core
+  - $ktor.client.cio
+  - $ktor.client.contentNegotiation
+  - $ktor.serialization.kotlinx.json
+  - org.jetbrains.kotlinx:kotlinx-io-core:0.9.1

@@ -1,0 +1,15 @@
+# Build & Amper
+build/
+.kotlin/
+*.kexe
+*.exe
+
+# IDE & Editor
+.idea/
+.vscode/
+.cursor/
+*.iml
+
+# Environment & secrets
+.env
+config.json

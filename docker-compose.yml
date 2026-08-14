@@ -1,0 +1,12 @@
+services:
+  reyumebot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/yumeyuka/reyumebot:latest
+    container_name: reyumebot
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      MINI_APP_URL: ${MINI_APP_URL:-}

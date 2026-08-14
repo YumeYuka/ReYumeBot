@@ -1,0 +1,7 @@
+.git/
+.idea/
+.cursor/
+.vscode/
+build/
+config.json
+.env
