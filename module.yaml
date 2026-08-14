@@ -9,7 +9,7 @@ settings:
 
 dependencies:
   - $ktor.client.core
-  - $ktor.client.cio
+  - io.ktor:ktor-client-curl:3.1.1
   - $ktor.client.contentNegotiation
   - $ktor.serialization.kotlinx.json
   - org.jetbrains.kotlinx:kotlinx-io-core:0.9.1

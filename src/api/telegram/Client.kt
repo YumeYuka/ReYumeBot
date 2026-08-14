@@ -4,7 +4,7 @@ import api.telegram.common.TelegramResponse
 import common.Logger
 import common.logger
 import io.ktor.client.*
-import io.ktor.client.engine.cio.*
+import io.ktor.client.engine.curl.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -47,7 +47,7 @@ private const val TELEGRAM_REQUEST_TIMEOUT_MILLIS = 75_000L
 private const val TELEGRAM_CONNECT_TIMEOUT_MILLIS = 10_000L
 
 private fun createTelegramHttpClient(json: Json): HttpClient =
-    HttpClient(CIO) {
+    HttpClient(Curl) {
         expectSuccess = false
         install(HttpTimeout) {
             requestTimeoutMillis = TELEGRAM_REQUEST_TIMEOUT_MILLIS
