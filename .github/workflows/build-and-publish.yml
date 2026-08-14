@@ -58,9 +58,12 @@ jobs:
         run: |
           sed -i.bak 's|product:.*|product: ${{ matrix.target }}|' module.yaml
           chmod +x ./kotlin
-          ./kotlin build
+          ./kotlin build -v release
           mkdir -p dist
-          find build/tasks -name "*.kexe" -exec cp {} dist/${{ matrix.artifact_name }} \;
+          find build/tasks -type f -name "*.kexe" | grep -i "release" | head -n 1 | xargs -I {} cp {} dist/${{ matrix.artifact_name }}
+          if [ ! -f "dist/${{ matrix.artifact_name }}" ]; then
+            find build/tasks -type f -name "*.kexe" -exec cp {} dist/${{ matrix.artifact_name }} \;
+          fi
           chmod +x dist/${{ matrix.artifact_name }}
 
       - name: Configure and Build on Windows
@@ -68,9 +71,12 @@ jobs:
         shell: pwsh
         run: |
           (Get-Content module.yaml) -replace 'product:.*', 'product: ${{ matrix.target }}' | Set-Content module.yaml
-          .\kotlin.bat build
+          .\kotlin.bat build -v release
           New-Item -ItemType Directory -Force -Path dist
-          $exe = (Get-ChildItem -Path build/tasks -Filter "*.exe" -Recurse | Select-Object -First 1).FullName
+          $exe = (Get-ChildItem -Path build/tasks -Filter "*.exe" -Recurse | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1).FullName
+          if (-not $exe) {
+            $exe = (Get-ChildItem -Path build/tasks -Filter "*.exe" -Recurse | Select-Object -First 1).FullName
+          }
           Copy-Item -Path $exe -Destination "dist/${{ matrix.artifact_name }}"
 
       - name: Upload Binary Artifact
