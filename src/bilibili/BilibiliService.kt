@@ -230,6 +230,14 @@ class BilibiliService(
         val highestQuality = qualityProbe.array("accept_quality").maxOfOrNull {
             it.jsonPrimitive.content.toIntOrNull() ?: 0
         }?.takeIf { it > 0 } ?: MAX_QUALITY
+        val mergedPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, 0)
+        val mergedUrl = mergedPayload.array("durl")
+            .firstOrNull()
+            ?.jsonObject
+            ?.string("url")
+            ?.takeIf { it.isNotBlank() }
+        if (mergedUrl != null) return VideoStreams(mergedUrl, null)
+
         val dashPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, DASH_FNVAL)
         val dash = dashPayload.objectValueOrNull("dash")
         if (dash != null) {
@@ -247,14 +255,7 @@ class BilibiliService(
             return VideoStreams(videoUrl, audioUrl)
         }
 
-        val mergedPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, 0)
-        val mergedUrl = mergedPayload.array("durl")
-            .firstOrNull()
-            ?.jsonObject
-            ?.string("url")
-            ?.takeIf { it.isNotBlank() }
-            ?: error("B站未返回可下载的媒体流。")
-        return VideoStreams(mergedUrl, null)
+        error("B站未返回可下载的媒体流。")
     }
 
     private fun resolveAudioUrl(dash: JsonObject): String? {
@@ -330,7 +331,7 @@ class BilibiliService(
 
 
     private fun remuxVideo(videoPath: Path, outputPath: Path) {
-        runCommand("ffmpeg -nostdin -y -loglevel error -i ${shellQuote(videoPath.toString())} -map 0:v:0 -c copy -movflags +faststart ${shellQuote(outputPath.toString())}")
+        runCommand("ffmpeg -nostdin -y -loglevel error -i ${shellQuote(videoPath.toString())} -map 0:v:0 -map 0:a:0? -c copy -movflags +faststart ${shellQuote(outputPath.toString())}")
     }
 
     private fun remuxVideo(videoPath: Path, audioPath: Path, outputPath: Path) {
