@@ -227,17 +227,44 @@ class BilibiliService(
         }
     private suspend fun resolveStreams(target: VideoTarget, cid: Long, pageUrl: String, cookieHeader: String): VideoStreams {
         val qualityProbe = requestPlayUrl(target, cid, pageUrl, cookieHeader, MAX_QUALITY, DASH_FNVAL)
-        val highestQuality = qualityProbe.array("accept_quality").maxOfOrNull { it.jsonPrimitive.content.toIntOrNull() ?: 0 }
-            ?.takeIf { it > 0 } ?: MAX_QUALITY
-        val mergedPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, 0)
-        val mergedUrl = mergedPayload.array("durl").firstOrNull()?.jsonObject?.string("url")
-        if (!mergedUrl.isNullOrBlank()) return VideoStreams(mergedUrl, null)
+        val highestQuality = qualityProbe.array("accept_quality").maxOfOrNull {
+            it.jsonPrimitive.content.toIntOrNull() ?: 0
+        }?.takeIf { it > 0 } ?: MAX_QUALITY
         val dashPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, DASH_FNVAL)
-        val dash = dashPayload.objectValue("dash")
-        val videoUrl = dash.array("video").maxByOrNull { it.jsonObject.int("id") }?.jsonObject?.baseUrl()
-            ?.takeIf { it.isNotBlank() } ?: error("B站未返回可下载的视频流。")
-        val audioUrl = dash.array("audio").maxByOrNull { it.jsonObject.int("id") }?.jsonObject?.baseUrl()?.takeIf { it.isNotBlank() }
-        return VideoStreams(videoUrl, audioUrl)
+        val dash = dashPayload.objectValueOrNull("dash")
+        if (dash != null) {
+            val videoUrl = dash.array("video")
+                .maxByOrNull { it.jsonObject.int("id") }
+                ?.jsonObject
+                ?.baseUrl()
+                ?.takeIf { it.isNotBlank() }
+                ?: error("B站未返回可下载的视频流。")
+            val audioUrl = resolveAudioUrl(dash)
+                ?: error("B站未返回可下载的音频流。")
+            return VideoStreams(videoUrl, audioUrl)
+        }
+
+        val mergedPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, 0)
+        val mergedUrl = mergedPayload.array("durl")
+            .firstOrNull()
+            ?.jsonObject
+            ?.string("url")
+            ?.takeIf { it.isNotBlank() }
+            ?: error("B站未返回可下载的媒体流。")
+        return VideoStreams(mergedUrl, null)
+    }
+
+    private fun resolveAudioUrl(dash: JsonObject): String? {
+        val audioStreams = buildList {
+            addAll(dash.array("audio"))
+            dash.objectValueOrNull("dolby")?.array("audio")?.let(::addAll)
+            dash.objectValueOrNull("flac")?.objectValueOrNull("audio")?.let(::add)
+        }
+        return audioStreams
+            .maxByOrNull { it.jsonObject.int("bandwidth") }
+            ?.jsonObject
+            ?.baseUrl()
+            ?.takeIf { it.isNotBlank() }
     }
 
     private suspend fun requestPlayUrl(target: VideoTarget, cid: Long, pageUrl: String, cookieHeader: String, quality: Int, fnval: Int): JsonObject =
@@ -303,7 +330,7 @@ class BilibiliService(
     }
 
     private fun remuxVideo(videoPath: Path, audioPath: Path, outputPath: Path) {
-        runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -c copy -map 0:v:0 -map 1:a:0 -movflags +faststart ${shellQuote(outputPath.toString())}")
+        runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -movflags +faststart ${shellQuote(outputPath.toString())}")
     }
 
     private suspend fun downloadFile(url: String, outputPath: Path, referer: String, cookieHeader: String) {
@@ -372,6 +399,7 @@ private fun JsonObject.string(name: String): String = this[name]?.jsonPrimitive?
 private fun JsonObject.int(name: String): Int = string(name).toIntOrNull() ?: 0
 private fun JsonObject.long(name: String): Long = string(name).toLongOrNull() ?: error("B站响应缺少 $name。")
 private fun JsonObject.objectValue(name: String): JsonObject = this[name]?.jsonObject ?: error("B站响应缺少 $name。")
+private fun JsonObject.objectValueOrNull(name: String): JsonObject? = this[name] as? JsonObject
 private fun JsonObject.array(name: String): JsonArray = this[name] as? JsonArray ?: JsonArray(emptyList())
 private fun JsonObject.baseUrl(): String = string("baseUrl").ifBlank { string("base_url") }
 private fun sanitizeFileName(name: String): String = name.replace(Regex("[^0-9A-Za-z._ -]"), "_").take(100).ifBlank { "bilibili-video" }

@@ -109,13 +109,15 @@ class BilibiliMessageHandler(
         }
     }
 
-    private fun formatVideoMetadata(downloadedVideo: BilibiliDownloadedVideo): String {
+    private fun formatVideoMetadata(downloadedVideo: BilibiliDownloadedVideo): String? {
+        val rawSummary = downloadedVideo.summary.trim()
+        if (rawSummary.isBlank()) return null
+
         val escapedTitle = escapeHtml(downloadedVideo.title.take(200))
         val escapedSourceUrl = escapeHtmlAttribute(downloadedVideo.sourceUrl)
         val sourceLink = "<a href=\"$escapedSourceUrl\">Source</a>"
-        val rawSummary = downloadedVideo.summary.trim()
         val truncatedSummary = if (rawSummary.length > 500) rawSummary.take(497) + "..." else rawSummary
-        val summarySection = if (truncatedSummary.isBlank()) "暂无简介。" else escapeHtml(truncatedSummary)
+        val summarySection = escapeHtml(truncatedSummary)
         return "<b>$escapedTitle</b>\n\n$summarySection\n\n$sourceLink"
     }
 
