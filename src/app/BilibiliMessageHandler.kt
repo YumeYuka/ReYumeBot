@@ -8,6 +8,8 @@ import api.telegram.core.Message
 import api.telegram.request.SendPhotoRequest
 import bilibili.BilibiliLoginStatus
 import bilibili.BilibiliService
+
+import common.logger
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +19,7 @@ import kotlinx.coroutines.launch
 class BilibiliMessageHandler(
     private val bilibiliService: BilibiliService,
 ) {
+    private val logger = logger<BilibiliMessageHandler>()
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     suspend fun handleMessage(botClient: TelegramBotClient, config: Config, message: Message): Boolean {
@@ -57,10 +60,22 @@ class BilibiliMessageHandler(
 
     private suspend fun downloadAndSend(botClient: TelegramBotClient, message: Message, videoUrl: String) {
         val downloadedVideo = runCatching { bilibiliService.downloadVideo(videoUrl) }.getOrElse { error ->
-            botClient.sendMessage(message.chat.id, "B站视频处理失败：${error.message}", messageThreadId = message.messageThreadId)
+            logger.warn("Bilibili video processing failed: url=$videoUrl, error=${error.message}")
+            botClient.sendMessage(
+                chatId = message.chat.id,
+                text = "B站视频处理失败：${error.message}\n原链接仍保留在聊天中：$videoUrl",
+                messageThreadId = message.messageThreadId,
+            )
             return
         }
         try {
+            botClient.sendMessage(
+                chatId = message.chat.id,
+                text = formatVideoMetadata(downloadedVideo),
+                parseMode = "HTML",
+                messageThreadId = message.messageThreadId,
+                disableWebPagePreview = true,
+            )
             botClient.sendVideoFile(
                 chatId = message.chat.id,
                 filePath = downloadedVideo.filePath,
@@ -69,6 +84,21 @@ class BilibiliMessageHandler(
             )
         } finally {
             bilibiliService.deleteDownloadedFile(downloadedVideo.filePath)
-        }
+        }    }
+
+    private fun formatVideoMetadata(downloadedVideo: bilibili.BilibiliDownloadedVideo): String {
+        val escapedTitle = escapeHtml(downloadedVideo.title)
+        val escapedSummary = escapeHtml(downloadedVideo.summary)
+        val escapedSourceUrl = escapeHtmlAttribute(downloadedVideo.sourceUrl)
+        val summarySection = escapedSummary.ifBlank { "暂无简介。" }
+        return "<b>$escapedTitle</b>\n\n\n$summarySection\n\n\n<a href=\"$escapedSourceUrl\">Source</a>"
     }
+
+    private fun escapeHtml(text: String): String =
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+
+    private fun escapeHtmlAttribute(text: String): String =
+        escapeHtml(text).replace("\"", "&quot;")
 }

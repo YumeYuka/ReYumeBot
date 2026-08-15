@@ -10,6 +10,8 @@ import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+
+import common.logger
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
@@ -63,12 +65,33 @@ data class BilibiliLoginQrCode(val loginUrl: String, val qrCodeKey: String)
 
 enum class BilibiliLoginStatus { SUCCESS, EXPIRED, TIMEOUT }
 
-data class BilibiliDownloadedVideo(val title: String, val filePath: String)
+data class BilibiliDownloadedVideo(
+    val title: String,
+    val summary: String,
+    val sourceUrl: String,
+    val filePath: String,
+)
+
+class BilibiliApiException(
+    operation: String,
+    val errorCode: Int?,
+    message: String,
+) : IllegalStateException(buildErrorMessage(operation, errorCode, message))
+
+private fun buildErrorMessage(operation: String, errorCode: Int?, message: String): String =
+    when (errorCode) {
+        -404 -> "视频不存在、已删除或当前不可访问。"
+        -101 -> "需要先使用 /bili_login 登录 B 站账号。"
+        -403 -> "当前账号没有访问该视频的权限。"
+        -412 -> "B站暂时拒绝了请求，请稍后重试。"
+        else -> "${operation}失败：${message.ifBlank { "未知错误" }}${errorCode?.let { "（错误码 $it）" }.orEmpty()}"
+    }
 
 class BilibiliService(
     private val credentialPath: Path = Path("data/bilibili-credentials.json"),
     private val downloadDirectory: Path = Path("data/bilibili-downloads"),
 ) : AutoCloseable {
+    private val logger = logger<BilibiliService>()
     private val json = Json { ignoreUnknownKeys = true }
     private val httpClient = HttpClient(Curl) {
         expectSuccess = false
@@ -130,12 +153,18 @@ class BilibiliService(
         val durationSeconds = videoInfo.int("duration")
         require(durationSeconds in 1..MAX_VIDEO_DURATION_SECONDS) { "视频时长超过 10 分钟，未发送。" }
         val title = videoInfo.string("title").ifBlank { "B站视频" }
+        val summary = videoInfo.string("desc").trim()
         val cid = resolveCid(target, pageUrl, cookieHeader)
         val streams = resolveStreams(target, cid, pageUrl, cookieHeader)
         val outputPath = Path(downloadDirectory, "${sanitizeFileName(title)}.mp4")
         SystemFileSystem.createDirectories(downloadDirectory)
         downloadStreams(streams, outputPath, pageUrl, cookieHeader)
-        return BilibiliDownloadedVideo(title, outputPath.toString())
+        return BilibiliDownloadedVideo(
+            title = title,
+            summary = summary,
+            sourceUrl = pageUrl,
+            filePath = outputPath.toString(),
+        )
     }
 
     fun deleteDownloadedFile(filePath: String) {
@@ -202,11 +231,16 @@ class BilibiliService(
     private fun parseArray(body: String, operation: String): JsonArray = parseData(body, operation) as? JsonArray ?: error("${operation}响应类型错误。")
 
     private fun parseData(body: String, operation: String): JsonElement {
-        val root = json.parseToJsonElement(body).jsonObject
-        require(root["code"]?.jsonPrimitive?.content?.toIntOrNull() == 0) {
-            "${operation}失败：${root["message"]?.jsonPrimitive?.content ?: "未知错误"}"
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrElse { error ->
+            throw BilibiliApiException(operation, null, "接口返回了非 JSON 响应：${body.take(120)}")
         }
-        return root["data"] ?: error("${operation}响应缺少数据。")
+        val errorCode = root["code"]?.jsonPrimitive?.content?.toIntOrNull()
+        if (errorCode != 0) {
+            val message = root["message"]?.jsonPrimitive?.content.orEmpty()
+            logger.warn("Bilibili API rejected request: operation=$operation, code=$errorCode, message=$message")
+            throw BilibiliApiException(operation, errorCode, message)
+        }
+        return root["data"] ?: throw BilibiliApiException(operation, errorCode, "响应缺少数据。")
     }
 
     private fun downloadStreams(streams: VideoStreams, outputPath: Path, referer: String, cookieHeader: String) {
