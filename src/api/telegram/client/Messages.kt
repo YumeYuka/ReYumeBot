@@ -21,12 +21,16 @@ suspend fun TelegramBotClient.sendVideoFile(
     chatId: TelegramId,
     filePath: String,
     caption: String,
+    durationSeconds: Int? = null,
+    parseMode: String? = null,
     messageThreadId: Long? = null,
 ): Unit {
     val threadArgument = messageThreadId?.let { " -F ${shellQuote("message_thread_id=$it")}" }.orEmpty()
+    val durationArgument = durationSeconds?.let { " -F ${shellQuote("duration=$it")}" }.orEmpty()
+    val parseModeArgument = parseMode?.let { " -F ${shellQuote("parse_mode=$it")}" }.orEmpty()
     val command =
         "curl --fail --silent --show-error --location " +
-            "-F ${shellQuote("chat_id=$chatId")}$threadArgument " +
+            "-F ${shellQuote("chat_id=$chatId")}$threadArgument$durationArgument$parseModeArgument " +
             "-F ${shellQuote("caption=$caption")} " +
             "-F ${shellQuote("supports_streaming=true")} " +
             "-F ${shellQuote("video=@$filePath")} " +

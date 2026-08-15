@@ -4,6 +4,7 @@ import api.telegram.TelegramBotClient
 import api.telegram.client.sendMessage
 import api.telegram.client.sendPhoto
 import api.telegram.client.sendVideoFile
+import api.telegram.client.deleteMessage
 import api.telegram.core.Message
 import api.telegram.request.SendPhotoRequest
 import bilibili.BilibiliDownloadedVideo
@@ -30,13 +31,13 @@ class BilibiliMessageHandler(
         }
 
         val videoUrl = bilibiliService.extractVideoUrl(text) ?: return false
-        botClient.sendMessage(
+        val progressMessage = botClient.sendMessage(
             chatId = message.chat.id,
             text = "正在解析并下载 B站视频，请稍候。",
             messageThreadId = message.messageThreadId,
         )
         backgroundScope.launch {
-            downloadAndSend(botClient, message, videoUrl)
+            downloadAndSend(botClient, message, videoUrl, progressMessage)
         }
         return true
     }
@@ -68,7 +69,7 @@ class BilibiliMessageHandler(
         }
     }
 
-    private suspend fun downloadAndSend(botClient: TelegramBotClient, message: Message, videoUrl: String) {
+    private suspend fun downloadAndSend(botClient: TelegramBotClient, message: Message, videoUrl: String, progressMessage: Message) {
         logger.info("Bilibili media job started: chatId=${message.chat.id}")
         val downloadedVideo = runCatching { bilibiliService.downloadVideo(videoUrl) }.getOrElse { error ->
             logger.warn("Bilibili media job failed before upload: chatId=${message.chat.id}, error=${error.message}")
@@ -81,21 +82,22 @@ class BilibiliMessageHandler(
         }
 
         try {
-            botClient.sendMessage(
-                chatId = message.chat.id,
-                text = formatVideoMetadata(downloadedVideo),
-                parseMode = "HTML",
-                messageThreadId = message.messageThreadId,
-                disableWebPagePreview = true,
-            )
+
             logger.info("Bilibili media upload started: chatId=${message.chat.id}")
             botClient.sendVideoFile(
                 chatId = message.chat.id,
                 filePath = downloadedVideo.filePath,
-                caption = downloadedVideo.title,
+                caption = formatVideoMetadata(downloadedVideo),
+                durationSeconds = downloadedVideo.durationSeconds,
+                parseMode = "HTML",
                 messageThreadId = message.messageThreadId,
             )
             logger.info("Bilibili media job completed: chatId=${message.chat.id}")
+            runCatching {
+                botClient.deleteMessage(message.chat.id, progressMessage.messageId)
+            }.onFailure { error ->
+                logger.warn("Bilibili progress message deletion failed: ${error.message}")
+            }
         } catch (error: Exception) {
             logger.warn("Bilibili media upload failed: chatId=${message.chat.id}, error=${error.message}")
             botClient.sendMessage(

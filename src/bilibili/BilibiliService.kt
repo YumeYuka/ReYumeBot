@@ -70,6 +70,7 @@ data class BilibiliDownloadedVideo(
     val summary: String,
     val sourceUrl: String,
     val filePath: String,
+    val durationSeconds: Int,
 )
 
 class BilibiliApiException(
@@ -169,6 +170,7 @@ class BilibiliService(
             summary = metadata.summary,
             sourceUrl = pageUrl,
             filePath = outputPath.toString(),
+            durationSeconds = metadata.durationSeconds,
         )
     }
 
@@ -282,15 +284,24 @@ class BilibiliService(
         try {
             downloadFile(streams.videoUrl, videoPath, referer, cookieHeader)
             if (streams.audioUrl == null) {
-                runCommand("mv ${shellQuote(videoPath.toString())} ${shellQuote(outputPath.toString())}")
+                remuxVideo(videoPath, outputPath)
                 return
             }
             downloadFile(streams.audioUrl, audioPath, referer, cookieHeader)
-            runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -c copy -map 0:v:0 -map 1:a:0 ${shellQuote(outputPath.toString())}")
+            remuxVideo(videoPath, audioPath, outputPath)
         } finally {
             if (SystemFileSystem.exists(videoPath)) SystemFileSystem.delete(videoPath)
             if (SystemFileSystem.exists(audioPath)) SystemFileSystem.delete(audioPath)
         }
+    }
+
+
+    private fun remuxVideo(videoPath: Path, outputPath: Path) {
+        runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -map 0:v:0 -c copy -movflags +faststart ${shellQuote(outputPath.toString())}")
+    }
+
+    private fun remuxVideo(videoPath: Path, audioPath: Path, outputPath: Path) {
+        runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -c copy -map 0:v:0 -map 1:a:0 -movflags +faststart ${shellQuote(outputPath.toString())}")
     }
 
     private fun downloadFile(url: String, outputPath: Path, referer: String, cookieHeader: String) {
