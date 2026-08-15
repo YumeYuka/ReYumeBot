@@ -147,13 +147,23 @@ class BilibiliService(
         val pageUrl = expandShortUrl(sourceUrl)
         val target = VideoTarget.fromUrl(pageUrl) ?: error("无法识别 B 站视频链接。")
         val cookieHeader = loadCredentials().asCookieHeader()
+
+        logger.info("Bilibili page lookup started")
         val page = resolvePage(target, pageUrl, cookieHeader)
+        logger.info("Bilibili page resolved: durationSeconds=${page.durationSeconds}")
+
         val metadata = resolveVideoMetadata(target, pageUrl, cookieHeader, page)
         require(metadata.durationSeconds in 1..MAX_VIDEO_DURATION_SECONDS) { "视频时长超过 10 分钟，未发送。" }
+
         val streams = resolveStreams(target, page.cid, pageUrl, cookieHeader)
+        logger.info("Bilibili playback stream resolved: hasSeparateAudio=${streams.audioUrl != null}")
+
         val outputPath = Path(downloadDirectory, "${sanitizeFileName(metadata.title)}.mp4")
         SystemFileSystem.createDirectories(downloadDirectory)
+        logger.info("Bilibili media download started")
         downloadStreams(streams, outputPath, pageUrl, cookieHeader)
+        logger.info("Bilibili media download completed")
+
         return BilibiliDownloadedVideo(
             title = metadata.title,
             summary = metadata.summary,
@@ -261,7 +271,6 @@ class BilibiliService(
         val errorCode = root["code"]?.jsonPrimitive?.content?.toIntOrNull()
         if (errorCode != 0) {
             val message = root["message"]?.jsonPrimitive?.content.orEmpty()
-            logger.warn("Bilibili API rejected request: operation=$operation, code=$errorCode, message=$message")
             throw BilibiliApiException(operation, errorCode, message)
         }
         return root["data"] ?: throw BilibiliApiException(operation, errorCode, "响应缺少数据。")

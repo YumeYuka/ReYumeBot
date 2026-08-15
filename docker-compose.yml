@@ -1,9 +1,7 @@
 services:
   reyumebot:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: ghcr.io/yumeyuka/reyumebot:latest
+    pull_policy: always
     container_name: reyumebot
     restart: unless-stopped
     working_dir: /app

@@ -6,9 +6,9 @@ import api.telegram.client.sendPhoto
 import api.telegram.client.sendVideoFile
 import api.telegram.core.Message
 import api.telegram.request.SendPhotoRequest
+import bilibili.BilibiliDownloadedVideo
 import bilibili.BilibiliLoginStatus
 import bilibili.BilibiliService
-
 import common.logger
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CoroutineScope
@@ -28,8 +28,16 @@ class BilibiliMessageHandler(
             startLogin(botClient, config, message)
             return true
         }
+
         val videoUrl = bilibiliService.extractVideoUrl(text) ?: return false
-        downloadAndSend(botClient, message, videoUrl)
+        botClient.sendMessage(
+            chatId = message.chat.id,
+            text = "正在解析并下载 B站视频，请稍候。",
+            messageThreadId = message.messageThreadId,
+        )
+        backgroundScope.launch {
+            downloadAndSend(botClient, message, videoUrl)
+        }
         return true
     }
 
@@ -40,6 +48,7 @@ class BilibiliMessageHandler(
             botClient.sendMessage(message.chat.id, "未配置或无权使用 B 站登录命令。", messageThreadId = message.messageThreadId)
             return
         }
+
         val qrCode = runCatching { bilibiliService.createLoginQrCode() }.getOrElse { error ->
             botClient.sendMessage(message.chat.id, "生成 B 站二维码失败：${error.message}", messageThreadId = message.messageThreadId)
             return
@@ -55,12 +64,14 @@ class BilibiliMessageHandler(
                 null -> "B站扫码登录失败，请重新发送 /bili_login。"
             }
             runCatching { botClient.sendMessage(message.chat.id, resultText, messageThreadId = message.messageThreadId) }
+                .onFailure { error -> logger.warn("Bilibili login status notification failed: ${error.message}") }
         }
     }
 
     private suspend fun downloadAndSend(botClient: TelegramBotClient, message: Message, videoUrl: String) {
+        logger.info("Bilibili media job started: chatId=${message.chat.id}")
         val downloadedVideo = runCatching { bilibiliService.downloadVideo(videoUrl) }.getOrElse { error ->
-            logger.warn("Bilibili video processing failed: url=$videoUrl, error=${error.message}")
+            logger.warn("Bilibili media job failed before upload: chatId=${message.chat.id}, error=${error.message}")
             botClient.sendMessage(
                 chatId = message.chat.id,
                 text = "B站视频处理失败：${error.message}\n原链接仍保留在聊天中：$videoUrl",
@@ -68,6 +79,7 @@ class BilibiliMessageHandler(
             )
             return
         }
+
         try {
             botClient.sendMessage(
                 chatId = message.chat.id,
@@ -76,17 +88,27 @@ class BilibiliMessageHandler(
                 messageThreadId = message.messageThreadId,
                 disableWebPagePreview = true,
             )
+            logger.info("Bilibili media upload started: chatId=${message.chat.id}")
             botClient.sendVideoFile(
                 chatId = message.chat.id,
                 filePath = downloadedVideo.filePath,
                 caption = downloadedVideo.title,
                 messageThreadId = message.messageThreadId,
             )
+            logger.info("Bilibili media job completed: chatId=${message.chat.id}")
+        } catch (error: Exception) {
+            logger.warn("Bilibili media upload failed: chatId=${message.chat.id}, error=${error.message}")
+            botClient.sendMessage(
+                chatId = message.chat.id,
+                text = "B站视频已下载，但发送到 Telegram 失败：${error.message}",
+                messageThreadId = message.messageThreadId,
+            )
         } finally {
             bilibiliService.deleteDownloadedFile(downloadedVideo.filePath)
-        }    }
+        }
+    }
 
-    private fun formatVideoMetadata(downloadedVideo: bilibili.BilibiliDownloadedVideo): String {
+    private fun formatVideoMetadata(downloadedVideo: BilibiliDownloadedVideo): String {
         val escapedTitle = escapeHtml(downloadedVideo.title)
         val escapedSummary = escapeHtml(downloadedVideo.summary)
         val escapedSourceUrl = escapeHtmlAttribute(downloadedVideo.sourceUrl)
