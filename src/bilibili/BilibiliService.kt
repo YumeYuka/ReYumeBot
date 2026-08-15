@@ -7,6 +7,8 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
@@ -278,7 +280,7 @@ class BilibiliService(
         return root["data"] ?: throw BilibiliApiException(operation, errorCode, "响应缺少数据。")
     }
 
-    private fun downloadStreams(streams: VideoStreams, outputPath: Path, referer: String, cookieHeader: String) {
+    private suspend fun downloadStreams(streams: VideoStreams, outputPath: Path, referer: String, cookieHeader: String) {
         val videoPath = Path(outputPath.parent!!, "${outputPath.name}.video.m4s")
         val audioPath = Path(outputPath.parent!!, "${outputPath.name}.audio.m4s")
         try {
@@ -304,11 +306,14 @@ class BilibiliService(
         runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -c copy -map 0:v:0 -map 1:a:0 -movflags +faststart ${shellQuote(outputPath.toString())}")
     }
 
-    private fun downloadFile(url: String, outputPath: Path, referer: String, cookieHeader: String) {
-        val cookieArgument = if (cookieHeader.isBlank()) "" else " -H ${shellQuote("Cookie: $cookieHeader")}"
-        runCommand("curl --fail --location --silent --show-error -A ${shellQuote(BILIBILI_USER_AGENT)} -e ${shellQuote(referer)} -H ${shellQuote("Origin: $BILIBILI_ORIGIN")}$cookieArgument -o ${shellQuote(outputPath.toString())} ${shellQuote(url)}")
+    private suspend fun downloadFile(url: String, outputPath: Path, referer: String, cookieHeader: String) {
+        val response = httpClient.get(url) { applyHeaders(referer, cookieHeader) }
+        require(response.status.value in 200..299) { "B站媒体下载失败：${response.status.value}" }
+        val responseBody = response.bodyAsBytes()
+        SystemFileSystem.sink(outputPath).buffered().use { sink ->
+            sink.write(responseBody)
+        }
     }
-
     private fun saveCredentials(credentials: BilibiliCredentials) {
         require(credentials.asCookieHeader().isNotBlank()) { "B站登录未返回有效 Cookie。" }
         SystemFileSystem.createDirectories(credentialPath.parent!!)
@@ -370,7 +375,15 @@ private fun JsonObject.objectValue(name: String): JsonObject = this[name]?.jsonO
 private fun JsonObject.array(name: String): JsonArray = this[name] as? JsonArray ?: JsonArray(emptyList())
 private fun JsonObject.baseUrl(): String = string("baseUrl").ifBlank { string("base_url") }
 private fun sanitizeFileName(name: String): String = name.replace(Regex("[^0-9A-Za-z._ -]"), "_").take(100).ifBlank { "bilibili-video" }
-private fun shellQuote(value: String): String = "'${value.replace("'", "'\\\"'\\\"'")}'"
+@OptIn(ExperimentalForeignApi::class)
+private fun shellQuote(value: String): String {
+    if (getenv("OS")?.toKString() == "Windows_NT") {
+        val windowsValue = value.replace("\\", "/").replace("\"", "\\\"")
+        return "\"$windowsValue\""
+    }
+
+    return "'${value.replace("'", "'\\\"'\\\"'")}'"
+}
 private fun runCommand(command: String) { require(system(command) == 0) { "媒体处理失败。" } }
 
 @OptIn(ExperimentalForeignApi::class)

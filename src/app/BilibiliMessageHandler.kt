@@ -115,7 +115,7 @@ class BilibiliMessageHandler(
         val escapedSummary = escapeHtml(downloadedVideo.summary)
         val escapedSourceUrl = escapeHtmlAttribute(downloadedVideo.sourceUrl)
         val summarySection = escapedSummary.ifBlank { "暂无简介。" }
-        return "<b>$escapedTitle</b>\n\n\n$summarySection\n\n\n<a href=\"$escapedSourceUrl\">Source</a>"
+        return "<b>$escapedTitle</b>\n\n$summarySection\n\n<a href=\"$escapedSourceUrl\">Source</a>"
     }
 
     private fun escapeHtml(text: String): String =

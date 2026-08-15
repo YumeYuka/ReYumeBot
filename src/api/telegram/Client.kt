@@ -103,6 +103,9 @@ class TelegramBotClient(
 
     internal val apiBaseUrl = "https://api.telegram.org/bot$token"
 
+    internal val multipartHttpClient: HttpClient
+        get() = httpClient ?: error("Multipart Telegram requests require the default HTTP transport.")
+
     private val httpClient: HttpClient? =
         if (transport == null) createTelegramHttpClient(json) else null
 
