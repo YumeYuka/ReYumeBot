@@ -28,7 +28,7 @@ suspend fun TelegramBotClient.sendVideoFile(
     messageThreadId: Long? = null,
 ): Unit {
     require(SystemFileSystem.exists(Path(filePath))) { "视频文件不存在：$filePath" }
-    val videoFileArgument = shellQuote("video=@$filePath")
+    val videoFileArgument = "-F ${shellQuote("video=@$filePath")}"
     val threadArgument = messageThreadId?.let { " -F ${shellQuote("message_thread_id=$it")}" }.orEmpty()
     val durationArgument = durationSeconds?.let { " -F ${shellQuote("duration=$it")}" }.orEmpty()
     val parseModeArgument = parseMode?.let { " -F ${shellQuote("parse_mode=$it")}" }.orEmpty()
