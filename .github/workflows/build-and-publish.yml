@@ -72,12 +72,19 @@ jobs:
         run: |
           (Get-Content module.yaml) -replace 'product:.*', 'product: ${{ matrix.target }}' | Set-Content module.yaml
           .\kotlin.bat build -v release
-          New-Item -ItemType Directory -Force -Path dist
-          $exe = (Get-ChildItem -Path build/tasks -Filter "*.exe" -Recurse | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1).FullName
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $buildRoot = Join-Path $PWD "build"
+          $executables = @(Get-ChildItem -Path $buildRoot -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue)
+          $exe = $executables | Where-Object { $_.FullName -match "(?i)release" } | Select-Object -First 1
           if (-not $exe) {
-            $exe = (Get-ChildItem -Path build/tasks -Filter "*.exe" -Recurse | Select-Object -First 1).FullName
+            $exe = $executables | Select-Object -First 1
           }
-          Copy-Item -Path $exe -Destination "dist/${{ matrix.artifact_name }}"
+          if (-not $exe) {
+            Write-Host "No Windows executable was produced. Build directory contents:"
+            Get-ChildItem -Path $buildRoot -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            throw "Could not locate a Windows executable under $buildRoot."
+          }
+          Copy-Item -Path $exe.FullName -Destination "dist/${{ matrix.artifact_name }}"
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
