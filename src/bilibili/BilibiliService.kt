@@ -234,7 +234,10 @@ class BilibiliService(
         val dash = dashPayload.objectValueOrNull("dash")
         if (dash != null) {
             val videoUrl = dash.array("video")
-                .maxByOrNull { it.jsonObject.int("id") }
+                .sortedWith(compareBy<JsonElement> {
+                    if (it.jsonObject.string("codecs").startsWith("avc1")) 1 else 0
+                }.thenByDescending { it.jsonObject.int("id") })
+                .lastOrNull()
                 ?.jsonObject
                 ?.baseUrl()
                 ?.takeIf { it.isNotBlank() }
@@ -318,6 +321,7 @@ class BilibiliService(
             }
             downloadFile(streams.audioUrl, audioPath, referer, cookieHeader)
             remuxVideo(videoPath, audioPath, outputPath)
+            verifyAudioStream(outputPath)
         } finally {
             if (SystemFileSystem.exists(videoPath)) SystemFileSystem.delete(videoPath)
             if (SystemFileSystem.exists(audioPath)) SystemFileSystem.delete(audioPath)
@@ -326,17 +330,23 @@ class BilibiliService(
 
 
     private fun remuxVideo(videoPath: Path, outputPath: Path) {
-        runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -map 0:v:0 -c copy -movflags +faststart ${shellQuote(outputPath.toString())}")
+        runCommand("ffmpeg -nostdin -y -loglevel error -i ${shellQuote(videoPath.toString())} -map 0:v:0 -c copy -movflags +faststart ${shellQuote(outputPath.toString())}")
     }
 
     private fun remuxVideo(videoPath: Path, audioPath: Path, outputPath: Path) {
-        runCommand("ffmpeg -y -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -movflags +faststart ${shellQuote(outputPath.toString())}")
+        runCommand("ffmpeg -nostdin -y -loglevel error -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart ${shellQuote(outputPath.toString())}")
+    }
+
+    private fun verifyAudioStream(outputPath: Path) {
+        val result = system("ffmpeg -nostdin -v error -i ${shellQuote(outputPath.toString())} -map 0:a:0 -f null -")
+        require(result == 0) { "合并后的视频没有可解码的音频轨道。" }
     }
 
     private suspend fun downloadFile(url: String, outputPath: Path, referer: String, cookieHeader: String) {
         val response = httpClient.get(url) { applyHeaders(referer, cookieHeader) }
         require(response.status.value in 200..299) { "B站媒体下载失败：${response.status.value}" }
         val responseBody = response.bodyAsBytes()
+        require(responseBody.isNotEmpty()) { "B站媒体下载结果为空。" }
         SystemFileSystem.sink(outputPath).buffered().use { sink ->
             sink.write(responseBody)
         }
