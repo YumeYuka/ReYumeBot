@@ -82,13 +82,13 @@ class BilibiliMessageHandler(
         }
 
         try {
-
             logger.info("Bilibili media upload started: chatId=${message.chat.id}")
             botClient.sendVideoFile(
                 chatId = message.chat.id,
                 filePath = downloadedVideo.filePath,
-                caption = "",
+                caption = formatVideoMetadata(downloadedVideo),
                 durationSeconds = downloadedVideo.durationSeconds,
+                parseMode = "HTML",
                 messageThreadId = message.messageThreadId,
             )
             logger.info("Bilibili media job completed: chatId=${message.chat.id}")
@@ -110,11 +110,13 @@ class BilibiliMessageHandler(
     }
 
     private fun formatVideoMetadata(downloadedVideo: BilibiliDownloadedVideo): String {
-        val escapedTitle = escapeHtml(downloadedVideo.title)
-        val escapedSummary = escapeHtml(downloadedVideo.summary)
+        val escapedTitle = escapeHtml(downloadedVideo.title.take(200))
         val escapedSourceUrl = escapeHtmlAttribute(downloadedVideo.sourceUrl)
-        val summarySection = escapedSummary.ifBlank { "暂无简介。" }
-        return "<b>$escapedTitle</b>\n\n$summarySection\n\n<a href=\"$escapedSourceUrl\">Source</a>"
+        val sourceLink = "<a href=\"$escapedSourceUrl\">Source</a>"
+        val rawSummary = downloadedVideo.summary.trim()
+        val truncatedSummary = if (rawSummary.length > 500) rawSummary.take(497) + "..." else rawSummary
+        val summarySection = if (truncatedSummary.isBlank()) "暂无简介。" else escapeHtml(truncatedSummary)
+        return "<b>$escapedTitle</b>\n\n$summarySection\n\n$sourceLink"
     }
 
     private fun escapeHtml(text: String): String =

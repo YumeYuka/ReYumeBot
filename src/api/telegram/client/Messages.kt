@@ -5,12 +5,9 @@ import api.telegram.common.TelegramId
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentDisposition
-import io.ktor.http.HttpHeaders
 import io.ktor.http.ContentType
-import io.ktor.http.Headers
-import io.ktor.client.request.forms.MultiPartFormDataContent
-import io.ktor.client.request.forms.formData
+import io.ktor.http.contentType
+import kotlinx.io.Buffer
 import kotlinx.io.buffered
 import kotlinx.io.readByteArray
 import api.telegram.core.Message
@@ -21,6 +18,7 @@ import api.telegram.request.SendMessageRequest
 import api.telegram.request.SendPhotoRequest
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import moe.yumeyuka.yumebot.common.nowMillis
 
 suspend fun TelegramBotClient.sendMessage(request: SendMessageRequest): Message =
     execute("sendMessage", request)
@@ -31,7 +29,7 @@ suspend fun TelegramBotClient.sendPhoto(request: SendPhotoRequest): Message =
 suspend fun TelegramBotClient.sendVideoFile(
     chatId: TelegramId,
     filePath: String,
-    caption: String,
+    caption: String? = null,
     durationSeconds: Int? = null,
     parseMode: String? = null,
     messageThreadId: Long? = null,
@@ -40,27 +38,31 @@ suspend fun TelegramBotClient.sendVideoFile(
     require(SystemFileSystem.exists(videoPath)) { "视频文件不存在：$filePath" }
     val videoBytes = SystemFileSystem.source(videoPath).buffered().use { it.readByteArray() }
     val fileName = videoPath.name
+
+    val boundary = "----ReYumeBotBoundary${nowMillis()}"
+    val textFields = buildMap {
+        put("chat_id", chatId.toString())
+        messageThreadId?.let { put("message_thread_id", it.toString()) }
+        durationSeconds?.let { put("duration", it.toString()) }
+        parseMode?.let { put("parse_mode", it) }
+        if (!caption.isNullOrBlank()) {
+            put("caption", caption)
+        }
+        put("supports_streaming", "true")
+    }
+
+    val multipartBytes = buildMultipartBody(
+        boundary = boundary,
+        textFields = textFields,
+        fileFieldName = "video",
+        fileName = fileName,
+        fileContentType = ContentType.Video.MP4.toString(),
+        fileBytes = videoBytes,
+    )
+
     val response = multipartHttpClient.post("$apiBaseUrl/sendVideo") {
-        setBody(
-            MultiPartFormDataContent(
-                formData {
-                    append("chat_id", chatId.toString())
-                    messageThreadId?.let { append("message_thread_id", it.toString()) }
-                    durationSeconds?.let { append("duration", it.toString()) }
-                    parseMode?.let { append("parse_mode", it) }
-                    append("caption", caption)
-                    append("supports_streaming", "true")
-                    append(
-                        "video",
-                        videoBytes,
-                        Headers.build {
-                            append(HttpHeaders.ContentType, ContentType.Video.MP4.toString())
-                            append(HttpHeaders.ContentDisposition, ContentDisposition.File.withParameter(ContentDisposition.Parameters.FileName, fileName).toString())
-                        },
-                    )
-                }
-            )
-        )
+        contentType(ContentType.MultiPart.FormData.withParameter("boundary", boundary))
+        setBody(multipartBytes)
     }
     val responseBody = response.bodyAsText()
     require(response.status.value in 200..299) { "Telegram 视频上传 HTTP 失败：${response.status.value} $responseBody" }
@@ -68,6 +70,30 @@ suspend fun TelegramBotClient.sendVideoFile(
     require(telegramResponse.ok && telegramResponse.result != null) {
         "Telegram 视频上传失败：${telegramResponse.errorCode} ${telegramResponse.description}"
     }
+}
+
+private fun buildMultipartBody(
+    boundary: String,
+    textFields: Map<String, String>,
+    fileFieldName: String,
+    fileName: String,
+    fileContentType: String,
+    fileBytes: ByteArray,
+): ByteArray {
+    val buffer = Buffer()
+    for ((name, value) in textFields) {
+        buffer.write("--$boundary\r\n".encodeToByteArray())
+        buffer.write("Content-Disposition: form-data; name=\"$name\"\r\n\r\n".encodeToByteArray())
+        buffer.write(value.encodeToByteArray())
+        buffer.write("\r\n".encodeToByteArray())
+    }
+    buffer.write("--$boundary\r\n".encodeToByteArray())
+    buffer.write("Content-Disposition: form-data; name=\"$fileFieldName\"; filename=\"$fileName\"\r\n".encodeToByteArray())
+    buffer.write("Content-Type: $fileContentType\r\n\r\n".encodeToByteArray())
+    buffer.write(fileBytes)
+    buffer.write("\r\n".encodeToByteArray())
+    buffer.write("--$boundary--\r\n".encodeToByteArray())
+    return buffer.readByteArray()
 }
 suspend fun TelegramBotClient.deleteMessage(request: DeleteMessageRequest): Boolean =
     execute("deleteMessage", request)
