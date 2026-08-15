@@ -147,21 +147,16 @@ class BilibiliService(
         val pageUrl = expandShortUrl(sourceUrl)
         val target = VideoTarget.fromUrl(pageUrl) ?: error("无法识别 B 站视频链接。")
         val cookieHeader = loadCredentials().asCookieHeader()
-        val videoInfo = requestObject("https://api.bilibili.com/x/web-interface/view", pageUrl, cookieHeader) {
-            target.apply(this)
-        }
-        val durationSeconds = videoInfo.int("duration")
-        require(durationSeconds in 1..MAX_VIDEO_DURATION_SECONDS) { "视频时长超过 10 分钟，未发送。" }
-        val title = videoInfo.string("title").ifBlank { "B站视频" }
-        val summary = videoInfo.string("desc").trim()
-        val cid = resolveCid(target, pageUrl, cookieHeader)
-        val streams = resolveStreams(target, cid, pageUrl, cookieHeader)
-        val outputPath = Path(downloadDirectory, "${sanitizeFileName(title)}.mp4")
+        val page = resolvePage(target, pageUrl, cookieHeader)
+        val metadata = resolveVideoMetadata(target, pageUrl, cookieHeader, page)
+        require(metadata.durationSeconds in 1..MAX_VIDEO_DURATION_SECONDS) { "视频时长超过 10 分钟，未发送。" }
+        val streams = resolveStreams(target, page.cid, pageUrl, cookieHeader)
+        val outputPath = Path(downloadDirectory, "${sanitizeFileName(metadata.title)}.mp4")
         SystemFileSystem.createDirectories(downloadDirectory)
         downloadStreams(streams, outputPath, pageUrl, cookieHeader)
         return BilibiliDownloadedVideo(
-            title = title,
-            summary = summary,
+            title = metadata.title,
+            summary = metadata.summary,
             sourceUrl = pageUrl,
             filePath = outputPath.toString(),
         )
@@ -178,15 +173,44 @@ class BilibiliService(
         return response.call.request.url.toString()
     }
 
-    private suspend fun resolveCid(target: VideoTarget, pageUrl: String, cookieHeader: String): Long {
+    private suspend fun resolvePage(target: VideoTarget, pageUrl: String, cookieHeader: String): BilibiliPage {
         val pages = requestArray("https://api.bilibili.com/x/player/pagelist", pageUrl, cookieHeader) {
             target.apply(this)
         }
         val pageNumber = Regex("[?&]p=(\\d+)").find(pageUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
         require(pageNumber in 1..pages.size) { "请求的分P不存在。" }
-        return pages[pageNumber - 1].jsonObject.long("cid")
+        val selectedPage = pages[pageNumber - 1].jsonObject
+        return BilibiliPage(
+            cid = selectedPage.long("cid"),
+            title = selectedPage.string("part").ifBlank { "B站视频" },
+            durationSeconds = selectedPage.int("duration"),
+        )
     }
 
+    private suspend fun resolveVideoMetadata(
+        target: VideoTarget,
+        pageUrl: String,
+        cookieHeader: String,
+        page: BilibiliPage,
+    ): BilibiliVideoMetadata =
+        try {
+            val videoInfo = requestObject("https://api.bilibili.com/x/web-interface/view", pageUrl, cookieHeader) {
+                target.apply(this)
+            }
+            BilibiliVideoMetadata(
+                title = videoInfo.string("title").ifBlank { page.title },
+                summary = videoInfo.string("desc").trim(),
+                durationSeconds = videoInfo.int("duration").takeIf { it > 0 } ?: page.durationSeconds,
+            )
+        } catch (error: BilibiliApiException) {
+            if (error.errorCode != -404) throw error
+            logger.warn("Bilibili view metadata unavailable; using pagelist fallback: url=$pageUrl")
+            BilibiliVideoMetadata(
+                title = page.title,
+                summary = "",
+                durationSeconds = page.durationSeconds,
+            )
+        }
     private suspend fun resolveStreams(target: VideoTarget, cid: Long, pageUrl: String, cookieHeader: String): VideoStreams {
         val qualityProbe = requestPlayUrl(target, cid, pageUrl, cookieHeader, MAX_QUALITY, DASH_FNVAL)
         val highestQuality = qualityProbe.array("accept_quality").maxOfOrNull { it.jsonPrimitive.content.toIntOrNull() ?: 0 }
@@ -295,6 +319,8 @@ class BilibiliService(
     override fun close() = httpClient.close()
 }
 
+private data class BilibiliPage(val cid: Long, val title: String, val durationSeconds: Int)
+private data class BilibiliVideoMetadata(val title: String, val summary: String, val durationSeconds: Int)
 private data class VideoStreams(val videoUrl: String, val audioUrl: String?)
 
 private sealed interface VideoTarget {
