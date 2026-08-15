@@ -15,6 +15,7 @@ import platform.posix.getenv
 data class Config(
     @SerialName("bot_token") val botToken: String,
     @SerialName("mini_app_url") val miniAppUrl: String? = null,
+    @SerialName("bilibili_admin_id") val bilibiliAdminId: Long? = null,
 )
 
 @OptIn(ExperimentalForeignApi::class)
@@ -23,11 +24,13 @@ private fun getEnv(name: String): String? = getenv(name)?.toKString()?.takeIf { 
 fun getConfig(): Config {
     val envToken = getEnv("BOT_TOKEN")
     val envMiniAppUrl = getEnv("MINI_APP_URL")
+    val envBilibiliAdminId = getEnv("BILIBILI_ADMIN_ID")?.toLongOrNull()
 
     if (envToken != null) {
         return Config(
             botToken = envToken,
-            miniAppUrl = envMiniAppUrl
+            miniAppUrl = envMiniAppUrl,
+            bilibiliAdminId = envBilibiliAdminId,
         )
     }
 

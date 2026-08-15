@@ -10,3 +10,6 @@ services:
     environment:
       BOT_TOKEN: ${BOT_TOKEN:-}
       MINI_APP_URL: ${MINI_APP_URL:-}
+      BILIBILI_ADMIN_ID: ${BILIBILI_ADMIN_ID:-}
+    volumes:
+      - ./data:/app/data

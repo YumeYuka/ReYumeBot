@@ -101,7 +101,7 @@ class TelegramBotClient(
             require(it.isNotEmpty()) { "Telegram bot token must not be blank" }
         }
 
-    private val baseUrl = "https://api.telegram.org/bot$token"
+    internal val apiBaseUrl = "https://api.telegram.org/bot$token"
 
     private val httpClient: HttpClient? =
         if (transport == null) createTelegramHttpClient(json) else null
@@ -110,7 +110,7 @@ class TelegramBotClient(
         transport
             ?: KtorTelegramBotHttpTransport(
                 httpClient = httpClient!!,
-                baseUrl = baseUrl,
+                baseUrl = apiBaseUrl,
                 logger = logger,
             )
 

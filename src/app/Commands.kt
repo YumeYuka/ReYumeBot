@@ -14,6 +14,7 @@ class CommandHandler(
     private val pendingJoinRequestRepository: PendingJoinRequestRepository,
     private val verificationService: VerificationService,
     private val markupFactory: TelegramMarkupFactory,
+    private val bilibiliMessageHandler: BilibiliMessageHandler,
 ) {
     private val logger = logger<CommandHandler>()
 
@@ -25,6 +26,7 @@ class CommandHandler(
         val text = message.text?.trim() ?: return
         when {
             text.startsWith("/start") -> sendStartGuide(botClient, config, message)
+            bilibiliMessageHandler.handleMessage(botClient, config, message) -> Unit
             text.startsWith("/ban") -> handleBanCommand(botClient, message)
             text.startsWith("/通过") || text.startsWith("/pass") || text.startsWith("/approve") ->
                 handlePassCommand(botClient, message)

@@ -13,3 +13,5 @@ build/
 # Environment & secrets
 .env
 config.json
+
+data/
