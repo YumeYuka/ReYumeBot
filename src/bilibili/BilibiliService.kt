@@ -104,7 +104,7 @@ class BilibiliService(
 
     fun extractVideoUrl(text: String): String? =
         b23Pattern.find(text)?.value ?: videoPattern.find(text)?.value
-            ?: bvidPattern.find(text)?.value?.let { "$BILIBILI_ORIGIN/video/${it.uppercase()}" }
+            ?: bvidPattern.find(text)?.value?.let { "$BILIBILI_ORIGIN/video/${normalizeBvid(it)}" }
             ?: avidPattern.find(text)?.value?.let { "$BILIBILI_ORIGIN/video/$it" }
 
     suspend fun createLoginQrCode(): BilibiliLoginQrCode {
@@ -345,10 +345,12 @@ private sealed interface VideoTarget {
 
     companion object {
         fun fromUrl(url: String): VideoTarget? =
-            bvidPattern.find(url)?.value?.let { Bvid(it.uppercase()) }
+            bvidPattern.find(url)?.value?.let { Bvid(normalizeBvid(it)) }
                 ?: avidPattern.find(url)?.groupValues?.get(1)?.toLongOrNull()?.let(::Aid)
     }
 }
+
+internal fun normalizeBvid(bvid: String): String = "BV" + bvid.drop(2)
 
 private fun JsonObject.string(name: String): String = this[name]?.jsonPrimitive?.content.orEmpty()
 private fun JsonObject.int(name: String): Int = string(name).toIntOrNull() ?: 0
