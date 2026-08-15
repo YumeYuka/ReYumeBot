@@ -87,9 +87,8 @@ class BilibiliMessageHandler(
             botClient.sendVideoFile(
                 chatId = message.chat.id,
                 filePath = downloadedVideo.filePath,
-                caption = formatVideoMetadata(downloadedVideo),
+                caption = "",
                 durationSeconds = downloadedVideo.durationSeconds,
-                parseMode = "HTML",
                 messageThreadId = message.messageThreadId,
             )
             logger.info("Bilibili media job completed: chatId=${message.chat.id}")
