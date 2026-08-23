@@ -14,6 +14,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.convert
 import kotlinx.cinterop.toKString
 import kotlinx.io.Buffer
 import kotlinx.io.buffered
@@ -161,7 +162,7 @@ private suspend fun TelegramBotClient.deliverMedia(
 @OptIn(ExperimentalForeignApi::class)
 private fun resolveAbsolutePath(path: String): String {
     if (path.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(path)) return path
-    val cwd = getcwd(null, 0)?.toKString()?.replace('\\', '/')?.trimEnd('/') ?: return path
+    val cwd = getcwd(null, 0.convert())?.toKString()?.replace('\\', '/')?.trimEnd('/') ?: return path
     return "$cwd/$path"
 }
 
