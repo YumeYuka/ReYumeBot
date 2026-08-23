@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # telegram-bot-api 二进制是 musl 链接的：连同 musl 版运行库一并拷入，
 # 用包装脚本把 LD_LIBRARY_PATH 限定在该进程内，避免影响主程序（glibc）。
 COPY --from=telegram-bot-api /usr/local/bin/telegram-bot-api /usr/local/lib/telegram-bot-api/telegram-bot-api
-COPY --from=telegram-bot-api /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /usr/local/lib/telegram-bot-api/
+COPY --from=telegram-bot-api /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /lib/libz.so.1 /usr/local/lib/telegram-bot-api/
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/usr/local/lib/telegram-bot-api${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexec /usr/local/lib/telegram-bot-api/telegram-bot-api "$@"\n' > /usr/local/bin/telegram-bot-api \
     && chmod +x /usr/local/bin/telegram-bot-api
 
