@@ -1,5 +1,6 @@
 package bilibili
 
+import common.logger
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.curl.Curl
 import io.ktor.client.plugins.HttpTimeout
@@ -8,14 +9,13 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.prepareGet
-import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
-
-import common.logger
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
@@ -40,6 +40,9 @@ private const val LOGIN_POLL_DELAY_MILLIS = 2_000L
 private const val LOGIN_TIMEOUT_MILLIS = 180_000L
 private const val MAX_QUALITY = 120
 private const val DASH_FNVAL = 4048
+private const val DOWNLOAD_MAX_ATTEMPTS = 4
+private const val DOWNLOAD_RETRY_BASE_DELAY_MILLIS = 1_000L
+private const val DOWNLOAD_CHUNK_SIZE = 256 * 1024L
 
 private val bvidPattern = Regex("(?i)BV[0-9A-Za-z]{10}")
 private val avidPattern = Regex("(?i)av(\\d+)")
@@ -54,16 +57,20 @@ data class BilibiliCredentials(
     @SerialName("DedeUserID__ckMd5") val dedeUserIdChecksum: String = "",
     @SerialName("refresh_token") val refreshToken: String = "",
 ) {
-    fun asCookieHeader(): String = listOf(
-        "SESSDATA" to sessData,
-        "bili_jct" to biliJct,
-        "DedeUserID" to dedeUserId,
-        "DedeUserID__ckMd5" to dedeUserIdChecksum,
-    ).filter { (_, value) -> value.isNotBlank() }
-        .joinToString("; ") { (name, value) -> "$name=$value" }
+    fun asCookieHeader(): String =
+        listOf(
+            "SESSDATA" to sessData,
+            "bili_jct" to biliJct,
+            "DedeUserID" to dedeUserId,
+            "DedeUserID__ckMd5" to dedeUserIdChecksum,
+        ).filter { (_, value) -> value.isNotBlank() }
+            .joinToString("; ") { (name, value) -> "$name=$value" }
 }
 
-data class BilibiliLoginQrCode(val loginUrl: String, val qrCodeKey: String)
+data class BilibiliLoginQrCode(
+    val loginUrl: String,
+    val qrCodeKey: String,
+)
 
 enum class BilibiliLoginStatus { SUCCESS, EXPIRED, TIMEOUT }
 
@@ -81,7 +88,11 @@ class BilibiliApiException(
     message: String,
 ) : IllegalStateException(buildErrorMessage(operation, errorCode, message))
 
-private fun buildErrorMessage(operation: String, errorCode: Int?, message: String): String =
+private fun buildErrorMessage(
+    operation: String,
+    errorCode: Int?,
+    message: String,
+): String =
     when (errorCode) {
         -404 -> "视频不存在、已删除或当前不可访问。"
         -101 -> "需要先使用 /bili_login 登录 B 站账号。"
@@ -96,14 +107,27 @@ class BilibiliService(
 ) : AutoCloseable {
     private val logger = logger<BilibiliService>()
     private val json = Json { ignoreUnknownKeys = true }
-    private val httpClient = HttpClient(Curl) {
-        expectSuccess = false
-        install(HttpTimeout) {
-            requestTimeoutMillis = 30_000L
-            connectTimeoutMillis = 10_000L
-            socketTimeoutMillis = 30_000L
+    private val httpClient =
+        HttpClient(Curl) {
+            expectSuccess = false
+            install(HttpTimeout) {
+                requestTimeoutMillis = 30_000L
+                connectTimeoutMillis = 10_000L
+                socketTimeoutMillis = 30_000L
+            }
         }
-    }
+
+    // Media downloads run on a separate client: no overall request timeout (files can be
+    // hundreds of MB), only connect/socket (stall) timeouts guard against dead connections.
+    private val mediaHttpClient =
+        HttpClient(Curl) {
+            expectSuccess = false
+            install(HttpTimeout) {
+                requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                connectTimeoutMillis = 15_000L
+                socketTimeoutMillis = 120_000L
+            }
+        }
 
     fun extractVideoUrl(text: String): String? =
         b23Pattern.find(text)?.value ?: videoPattern.find(text)?.value
@@ -122,25 +146,37 @@ class BilibiliService(
         val deadline = currentTimeMillis() + LOGIN_TIMEOUT_MILLIS
         while (currentTimeMillis() < deadline) {
             delay(LOGIN_POLL_DELAY_MILLIS)
-            val response = httpClient.get("https://passport.bilibili.com/x/passport-login/web/qrcode/poll") {
-                applyHeaders(BILIBILI_ORIGIN)
-                parameter("qrcode_key", qrCodeKey)
-            }
+            val response =
+                httpClient.get("https://passport.bilibili.com/x/passport-login/web/qrcode/poll") {
+                    applyHeaders(BILIBILI_ORIGIN)
+                    parameter("qrcode_key", qrCodeKey)
+                }
             val payload = parseObject(response.bodyAsText(), "B站扫码登录")
             when (payload.int("code")) {
                 0 -> {
-                    saveCredentials(BilibiliCredentials(
-                        sessData = extractCookie(response, "SESSDATA"),
-                        biliJct = extractCookie(response, "bili_jct"),
-                        dedeUserId = extractCookie(response, "DedeUserID"),
-                        dedeUserIdChecksum = extractCookie(response, "DedeUserID__ckMd5"),
-                        refreshToken = payload.string("refresh_token"),
-                    ))
+                    saveCredentials(
+                        BilibiliCredentials(
+                            sessData = extractCookie(response, "SESSDATA"),
+                            biliJct = extractCookie(response, "bili_jct"),
+                            dedeUserId = extractCookie(response, "DedeUserID"),
+                            dedeUserIdChecksum = extractCookie(response, "DedeUserID__ckMd5"),
+                            refreshToken = payload.string("refresh_token"),
+                        ),
+                    )
                     return BilibiliLoginStatus.SUCCESS
                 }
-                86038 -> return BilibiliLoginStatus.EXPIRED
-                86090, 86101 -> Unit
-                else -> error("B站扫码登录返回未知状态。")
+
+                86038 -> {
+                    return BilibiliLoginStatus.EXPIRED
+                }
+
+                86090, 86101 -> {
+                    Unit
+                }
+
+                else -> {
+                    error("B站扫码登录返回未知状态。")
+                }
             }
         }
         return BilibiliLoginStatus.TIMEOUT
@@ -184,14 +220,25 @@ class BilibiliService(
     private suspend fun expandShortUrl(sourceUrl: String): String {
         if (!sourceUrl.contains("b23.tv", ignoreCase = true)) return sourceUrl
         val response = httpClient.get(sourceUrl) { applyHeaders(BILIBILI_ORIGIN) }
-        return response.call.request.url.toString()
+        return response.call.request.url
+            .toString()
     }
 
-    private suspend fun resolvePage(target: VideoTarget, pageUrl: String, cookieHeader: String): BilibiliPage {
-        val pages = requestArray("https://api.bilibili.com/x/player/pagelist", pageUrl, cookieHeader) {
-            target.apply(this)
-        }
-        val pageNumber = Regex("[?&]p=(\\d+)").find(pageUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+    private suspend fun resolvePage(
+        target: VideoTarget,
+        pageUrl: String,
+        cookieHeader: String,
+    ): BilibiliPage {
+        val pages =
+            requestArray("https://api.bilibili.com/x/player/pagelist", pageUrl, cookieHeader) {
+                target.apply(this)
+            }
+        val pageNumber =
+            Regex("[?&]p=(\\d+)")
+                .find(pageUrl)
+                ?.groupValues
+                ?.get(1)
+                ?.toIntOrNull() ?: 1
         require(pageNumber in 1..pages.size) { "请求的分P不存在。" }
         val selectedPage = pages[pageNumber - 1].jsonObject
         return BilibiliPage(
@@ -208,9 +255,10 @@ class BilibiliService(
         page: BilibiliPage,
     ): BilibiliVideoMetadata =
         try {
-            val videoInfo = requestObject("https://api.bilibili.com/x/web-interface/view", pageUrl, cookieHeader) {
-                target.apply(this)
-            }
+            val videoInfo =
+                requestObject("https://api.bilibili.com/x/web-interface/view", pageUrl, cookieHeader) {
+                    target.apply(this)
+                }
             BilibiliVideoMetadata(
                 title = videoInfo.string("title").ifBlank { page.title },
                 summary = videoInfo.string("desc").trim(),
@@ -225,33 +273,48 @@ class BilibiliService(
                 durationSeconds = page.durationSeconds,
             )
         }
-    private suspend fun resolveStreams(target: VideoTarget, cid: Long, pageUrl: String, cookieHeader: String): VideoStreams {
+
+    private suspend fun resolveStreams(
+        target: VideoTarget,
+        cid: Long,
+        pageUrl: String,
+        cookieHeader: String,
+    ): VideoStreams {
         val qualityProbe = requestPlayUrl(target, cid, pageUrl, cookieHeader, MAX_QUALITY, DASH_FNVAL)
-        val highestQuality = qualityProbe.array("accept_quality").maxOfOrNull {
-            it.jsonPrimitive.content.toIntOrNull() ?: 0
-        }?.takeIf { it > 0 } ?: MAX_QUALITY
+        val highestQuality =
+            qualityProbe
+                .array("accept_quality")
+                .maxOfOrNull {
+                    it.jsonPrimitive.content.toIntOrNull() ?: 0
+                }?.takeIf { it > 0 } ?: MAX_QUALITY
         val mergedPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, 0)
-        val mergedUrl = mergedPayload.array("durl")
-            .firstOrNull()
-            ?.jsonObject
-            ?.string("url")
-            ?.takeIf { it.isNotBlank() }
+        val mergedUrl =
+            mergedPayload
+                .array("durl")
+                .firstOrNull()
+                ?.jsonObject
+                ?.string("url")
+                ?.takeIf { it.isNotBlank() }
         if (mergedUrl != null) return VideoStreams(mergedUrl, null)
 
         val dashPayload = requestPlayUrl(target, cid, pageUrl, cookieHeader, highestQuality, DASH_FNVAL)
         val dash = dashPayload.objectValueOrNull("dash")
         if (dash != null) {
-            val videoUrl = dash.array("video")
-                .sortedWith(compareBy<JsonElement> {
-                    if (it.jsonObject.string("codecs").startsWith("avc1")) 1 else 0
-                }.thenByDescending { it.jsonObject.int("id") })
-                .lastOrNull()
-                ?.jsonObject
-                ?.baseUrl()
-                ?.takeIf { it.isNotBlank() }
-                ?: error("B站未返回可下载的视频流。")
-            val audioUrl = resolveAudioUrl(dash)
-                ?: error("B站未返回可下载的音频流。")
+            val videoUrl =
+                dash
+                    .array("video")
+                    .sortedWith(
+                        compareBy<JsonElement> {
+                            if (it.jsonObject.string("codecs").startsWith("avc1")) 1 else 0
+                        }.thenByDescending { it.jsonObject.int("id") },
+                    ).lastOrNull()
+                    ?.jsonObject
+                    ?.baseUrl()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: error("B站未返回可下载的视频流。")
+            val audioUrl =
+                resolveAudioUrl(dash)
+                    ?: error("B站未返回可下载的音频流。")
             return VideoStreams(videoUrl, audioUrl)
         }
 
@@ -259,11 +322,12 @@ class BilibiliService(
     }
 
     private fun resolveAudioUrl(dash: JsonObject): String? {
-        val audioStreams = buildList {
-            addAll(dash.array("audio"))
-            dash.objectValueOrNull("dolby")?.array("audio")?.let(::addAll)
-            dash.objectValueOrNull("flac")?.objectValueOrNull("audio")?.let(::add)
-        }
+        val audioStreams =
+            buildList {
+                addAll(dash.array("audio"))
+                dash.objectValueOrNull("dolby")?.array("audio")?.let(::addAll)
+                dash.objectValueOrNull("flac")?.objectValueOrNull("audio")?.let(::add)
+            }
         return audioStreams
             .maxByOrNull { it.jsonObject.int("bandwidth") }
             ?.jsonObject
@@ -271,7 +335,14 @@ class BilibiliService(
             ?.takeIf { it.isNotBlank() }
     }
 
-    private suspend fun requestPlayUrl(target: VideoTarget, cid: Long, pageUrl: String, cookieHeader: String, quality: Int, fnval: Int): JsonObject =
+    private suspend fun requestPlayUrl(
+        target: VideoTarget,
+        cid: Long,
+        pageUrl: String,
+        cookieHeader: String,
+        quality: Int,
+        fnval: Int,
+    ): JsonObject =
         requestObject("https://api.bilibili.com/x/player/playurl", pageUrl, cookieHeader) {
             target.apply(this)
             parameter("cid", cid)
@@ -284,25 +355,51 @@ class BilibiliService(
             parameter("high_quality", 1)
         }
 
-    private suspend fun requestObject(url: String, referer: String, cookieHeader: String = "", configure: HttpRequestBuilder.() -> Unit = {}): JsonObject =
-        parseObject(request(url, referer, cookieHeader, configure).bodyAsText(), "B站接口请求")
+    private suspend fun requestObject(
+        url: String,
+        referer: String,
+        cookieHeader: String = "",
+        configure: HttpRequestBuilder.() -> Unit = {
+        },
+    ): JsonObject = parseObject(request(url, referer, cookieHeader, configure).bodyAsText(), "B站接口请求")
 
-    private suspend fun requestArray(url: String, referer: String, cookieHeader: String = "", configure: HttpRequestBuilder.() -> Unit = {}): JsonArray =
-        parseArray(request(url, referer, cookieHeader, configure).bodyAsText(), "B站接口请求")
+    private suspend fun requestArray(
+        url: String,
+        referer: String,
+        cookieHeader: String = "",
+        configure: HttpRequestBuilder.() -> Unit = {
+        },
+    ): JsonArray = parseArray(request(url, referer, cookieHeader, configure).bodyAsText(), "B站接口请求")
 
-    private suspend fun request(url: String, referer: String, cookieHeader: String, configure: HttpRequestBuilder.() -> Unit): HttpResponse =
+    private suspend fun request(
+        url: String,
+        referer: String,
+        cookieHeader: String,
+        configure: HttpRequestBuilder.() -> Unit,
+    ): HttpResponse =
         httpClient.get(url) {
             applyHeaders(referer, cookieHeader)
             configure()
         }
 
-    private fun parseObject(body: String, operation: String): JsonObject = parseData(body, operation).jsonObject
-    private fun parseArray(body: String, operation: String): JsonArray = parseData(body, operation) as? JsonArray ?: error("${operation}响应类型错误。")
+    private fun parseObject(
+        body: String,
+        operation: String,
+    ): JsonObject = parseData(body, operation).jsonObject
 
-    private fun parseData(body: String, operation: String): JsonElement {
-        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrElse { error ->
-            throw BilibiliApiException(operation, null, "接口返回了非 JSON 响应：${body.take(120)}")
-        }
+    private fun parseArray(
+        body: String,
+        operation: String,
+    ): JsonArray = parseData(body, operation) as? JsonArray ?: error("${operation}响应类型错误。")
+
+    private fun parseData(
+        body: String,
+        operation: String,
+    ): JsonElement {
+        val root =
+            runCatching { json.parseToJsonElement(body).jsonObject }.getOrElse { error ->
+                throw BilibiliApiException(operation, null, "接口返回了非 JSON 响应：${body.take(120)}")
+            }
         val errorCode = root["code"]?.jsonPrimitive?.content?.toIntOrNull()
         if (errorCode != 0) {
             val message = root["message"]?.jsonPrimitive?.content.orEmpty()
@@ -311,7 +408,12 @@ class BilibiliService(
         return root["data"] ?: throw BilibiliApiException(operation, errorCode, "响应缺少数据。")
     }
 
-    private suspend fun downloadStreams(streams: VideoStreams, outputPath: Path, referer: String, cookieHeader: String) {
+    private suspend fun downloadStreams(
+        streams: VideoStreams,
+        outputPath: Path,
+        referer: String,
+        cookieHeader: String,
+    ) {
         val videoPath = Path(outputPath.parent!!, "${outputPath.name}.video.m4s")
         val audioPath = Path(outputPath.parent!!, "${outputPath.name}.audio.m4s")
         try {
@@ -329,13 +431,29 @@ class BilibiliService(
         }
     }
 
-
-    private fun remuxVideo(videoPath: Path, outputPath: Path) {
-        runCommand("ffmpeg -nostdin -y -loglevel error -i ${shellQuote(videoPath.toString())} -map 0:v:0 -map 0:a:0? -c copy -movflags +faststart ${shellQuote(outputPath.toString())}")
+    private fun remuxVideo(
+        videoPath: Path,
+        outputPath: Path,
+    ) {
+        runCommand(
+            "ffmpeg -nostdin -y -loglevel error -i ${shellQuote(
+                videoPath.toString(),
+            )} -map 0:v:0 -map 0:a:0? -c copy -movflags +faststart ${shellQuote(outputPath.toString())}",
+        )
     }
 
-    private fun remuxVideo(videoPath: Path, audioPath: Path, outputPath: Path) {
-        runCommand("ffmpeg -nostdin -y -loglevel error -i ${shellQuote(videoPath.toString())} -i ${shellQuote(audioPath.toString())} -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart ${shellQuote(outputPath.toString())}")
+    private fun remuxVideo(
+        videoPath: Path,
+        audioPath: Path,
+        outputPath: Path,
+    ) {
+        runCommand(
+            "ffmpeg -nostdin -y -loglevel error -i ${shellQuote(
+                videoPath.toString(),
+            )} -i ${shellQuote(
+                audioPath.toString(),
+            )} -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart ${shellQuote(outputPath.toString())}",
+        )
     }
 
     private fun verifyAudioStream(outputPath: Path) {
@@ -343,15 +461,73 @@ class BilibiliService(
         require(result == 0) { "合并后的视频没有可解码的音频轨道。" }
     }
 
-    private suspend fun downloadFile(url: String, outputPath: Path, referer: String, cookieHeader: String) {
-        val response = httpClient.get(url) { applyHeaders(referer, cookieHeader) }
-        require(response.status.value in 200..299) { "B站媒体下载失败：${response.status.value}" }
-        val responseBody = response.bodyAsBytes()
-        require(responseBody.isNotEmpty()) { "B站媒体下载结果为空。" }
-        SystemFileSystem.sink(outputPath).buffered().use { sink ->
-            sink.write(responseBody)
+    private suspend fun downloadFile(
+        url: String,
+        outputPath: Path,
+        referer: String,
+        cookieHeader: String,
+    ) {
+        var attempt = 0
+        while (true) {
+            attempt++
+            val resumeFrom = fileSize(outputPath)
+            try {
+                streamToFile(url, outputPath, referer, cookieHeader, resumeFrom)
+                return
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (attempt >= DOWNLOAD_MAX_ATTEMPTS) {
+                    if (SystemFileSystem.exists(outputPath)) SystemFileSystem.delete(outputPath)
+                    throw IllegalStateException("B站媒体下载失败（重试 $DOWNLOAD_MAX_ATTEMPTS 次后放弃）：${error.message}")
+                }
+                logger.warn("Bilibili media download attempt $attempt failed, resuming at ${fileSize(outputPath)} bytes: ${error.message}")
+                delay(DOWNLOAD_RETRY_BASE_DELAY_MILLIS * attempt)
+            }
         }
     }
+
+    private suspend fun streamToFile(
+        url: String,
+        outputPath: Path,
+        referer: String,
+        cookieHeader: String,
+        resumeFrom: Long,
+    ) {
+        var expectedTotal = -1L
+        mediaHttpClient
+            .prepareGet(url) {
+                applyHeaders(referer, cookieHeader)
+                if (resumeFrom > 0) header(HttpHeaders.Range, "bytes=$resumeFrom-")
+            }.execute { response ->
+                val appending = resumeFrom > 0 && response.status.value == 206
+                when (response.status.value) {
+                    in 200..299 -> Unit
+                    403, 410 -> error("B站媒体下载地址已过期（${response.status.value}）。")
+                    416 -> error("B站媒体下载范围请求被拒绝（416）。")
+                    else -> error("B站媒体下载失败：${response.status.value}")
+                }
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
+                expectedTotal = if (appending && contentLength > 0) resumeFrom + contentLength else contentLength
+                if (!appending && resumeFrom > 0 && SystemFileSystem.exists(outputPath)) SystemFileSystem.delete(outputPath)
+                val channel = response.bodyAsChannel()
+                val buffer = ByteArray(DOWNLOAD_CHUNK_SIZE.toInt())
+                SystemFileSystem.sink(outputPath, append = appending).buffered().use { sink ->
+                    while (true) {
+                        val read = channel.readAvailable(buffer, 0, buffer.size)
+                        if (read == -1) break
+                        if (read > 0) sink.write(buffer, 0, read)
+                    }
+                }
+            }
+        val actualSize = fileSize(outputPath)
+        require(actualSize > 0) { "B站媒体下载结果为空。" }
+        if (expectedTotal > 0) {
+            require(actualSize >= expectedTotal) { "B站媒体下载不完整：$actualSize/$expectedTotal 字节。" }
+        }
+    }
+
+    private fun fileSize(path: Path): Long = if (SystemFileSystem.exists(path)) SystemFileSystem.metadataOrNull(path)?.size ?: 0L else 0L
+
     private fun saveCredentials(credentials: BilibiliCredentials) {
         require(credentials.asCookieHeader().isNotBlank()) { "B站登录未返回有效 Cookie。" }
         SystemFileSystem.createDirectories(credentialPath.parent!!)
@@ -367,53 +543,97 @@ class BilibiliService(
         }
     }
 
-    private fun extractCookie(response: HttpResponse, name: String): String =
-        response.headers.getAll(HttpHeaders.SetCookie)
+    private fun extractCookie(
+        response: HttpResponse,
+        name: String,
+    ): String =
+        response.headers
+            .getAll(HttpHeaders.SetCookie)
             ?.firstNotNullOfOrNull { Regex("^${Regex.escape(name)}=([^;]+)").find(it)?.groupValues?.get(1) }
             .orEmpty()
 
-    private fun HttpRequestBuilder.applyHeaders(referer: String, cookieHeader: String = "") {
+    private fun HttpRequestBuilder.applyHeaders(
+        referer: String,
+        cookieHeader: String = "",
+    ) {
         header(HttpHeaders.UserAgent, BILIBILI_USER_AGENT)
         header(HttpHeaders.Referrer, referer)
         header(HttpHeaders.Origin, BILIBILI_ORIGIN)
         if (cookieHeader.isNotBlank()) header(HttpHeaders.Cookie, cookieHeader)
     }
 
-    override fun close() = httpClient.close()
+    override fun close() {
+        httpClient.close()
+        mediaHttpClient.close()
+    }
 }
 
-private data class BilibiliPage(val cid: Long, val title: String, val durationSeconds: Int)
-private data class BilibiliVideoMetadata(val title: String, val summary: String, val durationSeconds: Int)
-private data class VideoStreams(val videoUrl: String, val audioUrl: String?)
+private data class BilibiliPage(
+    val cid: Long,
+    val title: String,
+    val durationSeconds: Int,
+)
+
+private data class BilibiliVideoMetadata(
+    val title: String,
+    val summary: String,
+    val durationSeconds: Int,
+)
+
+private data class VideoStreams(
+    val videoUrl: String,
+    val audioUrl: String?,
+)
 
 private sealed interface VideoTarget {
     fun apply(builder: HttpRequestBuilder)
 
-    data class Bvid(val value: String) : VideoTarget {
-        override fun apply(builder: HttpRequestBuilder) { builder.parameter("bvid", value) }
+    data class Bvid(
+        val value: String,
+    ) : VideoTarget {
+        override fun apply(builder: HttpRequestBuilder) {
+            builder.parameter("bvid", value)
+        }
     }
 
-    data class Aid(val value: Long) : VideoTarget {
-        override fun apply(builder: HttpRequestBuilder) { builder.parameter("aid", value) }
+    data class Aid(
+        val value: Long,
+    ) : VideoTarget {
+        override fun apply(builder: HttpRequestBuilder) {
+            builder.parameter("aid", value)
+        }
     }
 
     companion object {
         fun fromUrl(url: String): VideoTarget? =
             bvidPattern.find(url)?.value?.let { Bvid(normalizeBvid(it)) }
-                ?: avidPattern.find(url)?.groupValues?.get(1)?.toLongOrNull()?.let(::Aid)
+                ?: avidPattern
+                    .find(url)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLongOrNull()
+                    ?.let(::Aid)
     }
 }
 
 internal fun normalizeBvid(bvid: String): String = "BV" + bvid.drop(2)
 
 private fun JsonObject.string(name: String): String = this[name]?.jsonPrimitive?.content.orEmpty()
+
 private fun JsonObject.int(name: String): Int = string(name).toIntOrNull() ?: 0
+
 private fun JsonObject.long(name: String): Long = string(name).toLongOrNull() ?: error("B站响应缺少 $name。")
+
 private fun JsonObject.objectValue(name: String): JsonObject = this[name]?.jsonObject ?: error("B站响应缺少 $name。")
+
 private fun JsonObject.objectValueOrNull(name: String): JsonObject? = this[name] as? JsonObject
+
 private fun JsonObject.array(name: String): JsonArray = this[name] as? JsonArray ?: JsonArray(emptyList())
+
 private fun JsonObject.baseUrl(): String = string("baseUrl").ifBlank { string("base_url") }
+
 private fun sanitizeFileName(name: String): String = name.replace(Regex("[^0-9A-Za-z._ -]"), "_").take(100).ifBlank { "bilibili-video" }
+
 @OptIn(ExperimentalForeignApi::class)
 private fun shellQuote(value: String): String {
     if (getenv("OS")?.toKString() == "Windows_NT") {
@@ -423,7 +643,13 @@ private fun shellQuote(value: String): String {
 
     return "'${value.replace("'", "'\\\"'\\\"'")}'"
 }
-private fun runCommand(command: String) { require(system(command) == 0) { "媒体处理失败。" } }
+
+private fun runCommand(command: String) {
+    require(system(command) == 0) { "媒体处理失败。" }
+}
 
 @OptIn(ExperimentalForeignApi::class)
-private fun currentTimeMillis(): Long = getenv("SOURCE_DATE_EPOCH")?.toKString()?.toLongOrNull()?.times(1_000) ?: kotlin.time.Clock.System.now().toEpochMilliseconds()
+private fun currentTimeMillis(): Long =
+    getenv("SOURCE_DATE_EPOCH")?.toKString()?.toLongOrNull()?.times(1_000) ?: kotlin.time.Clock.System
+        .now()
+        .toEpochMilliseconds()
