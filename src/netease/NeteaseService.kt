@@ -64,6 +64,7 @@ data class NeteaseDownloadedSong(
     val name: String,
     val artists: String,
     val album: String,
+    val thumbnailPath: String?,
     val trackUrl: String,
     val filePath: String,
     val durationSeconds: Int,
@@ -117,11 +118,13 @@ class NeteaseService(
             header(HttpHeaders.Referrer, NETEASE_ORIGIN)
         }
         logger.info("Netease audio download completed: id=$songId")
+        val thumbnailPath = downloadThumbnail(detail.coverUrl, fileName)
 
         return NeteaseDownloadedSong(
             name = detail.name,
             artists = detail.artists,
             album = detail.album,
+            thumbnailPath = thumbnailPath?.toString(),
             trackUrl = trackUrl,
             filePath = outputPath.toString(),
             durationSeconds = detail.durationSeconds,
@@ -157,6 +160,7 @@ class NeteaseService(
         val name: String,
         val artists: String,
         val album: String,
+        val coverUrl: String,
         val durationSeconds: Int,
     )
 
@@ -180,8 +184,27 @@ class NeteaseService(
                 .orEmpty()
                 .ifBlank { "未知歌手" }
         val album = (song["al"] as? JsonObject)?.string("name").orEmpty()
+        val coverUrl = (song["al"] as? JsonObject)?.string("picUrl").orEmpty()
         val durationSeconds = song.int("dt") / 1000
-        return SongDetail(name, artists, album, durationSeconds)
+        return SongDetail(name, artists, album, coverUrl, durationSeconds)
+    }
+
+    private suspend fun downloadThumbnail(
+        rawUrl: String,
+        fileName: String,
+    ): Path? {
+        if (rawUrl.isBlank()) return null
+        val url = if (rawUrl.contains("?")) "$rawUrl&param=300y300" else "$rawUrl?param=300y300"
+        val outputPath = Path(downloadDirectory, "$fileName-thumbnail.jpg")
+        return runCatching {
+            mediaDownloader.download(url, outputPath) {
+                header(HttpHeaders.UserAgent, NETEASE_USER_AGENT)
+                header(HttpHeaders.Referrer, NETEASE_ORIGIN)
+            }
+            outputPath
+        }.onFailure { error ->
+            logger.warn("Netease thumbnail download failed: ${error.message}")
+        }.getOrNull()
     }
 
     /** 按音质逐级降级请求播放地址，直到可播放且大小在 Telegram 上传限制内。 */

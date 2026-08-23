@@ -64,6 +64,7 @@ class NeteaseMessageHandler(
                 filePath = song.filePath,
                 title = song.name,
                 performer = song.artists,
+                thumbnailPath = song.thumbnailPath,
                 caption = formatSongCaption(song),
                 durationSeconds = song.durationSeconds,
                 parseMode = "HTML",
@@ -84,6 +85,7 @@ class NeteaseMessageHandler(
             )
         } finally {
             neteaseService.deleteDownloadedFile(song.filePath)
+            song.thumbnailPath?.let(neteaseService::deleteDownloadedFile)
         }
     }
 

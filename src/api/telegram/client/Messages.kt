@@ -69,6 +69,7 @@ suspend fun TelegramBotClient.sendAudioFile(
     filePath: String,
     title: String? = null,
     performer: String? = null,
+    thumbnailPath: String? = null,
     caption: String? = null,
     durationSeconds: Int? = null,
     parseMode: String? = null,
@@ -108,6 +109,7 @@ suspend fun TelegramBotClient.sendAudioFile(
         fileName = fileName,
         fileContentType = contentType,
         textFields = textFields,
+        thumbnailPath = thumbnailPath,
     )
 }
 
@@ -122,11 +124,24 @@ private suspend fun TelegramBotClient.deliverMedia(
     fileName: String,
     fileContentType: String,
     textFields: Map<String, String>,
+    thumbnailPath: String? = null,
 ) {
+    val thumbnail =
+        thumbnailPath?.let { path ->
+            val thumbnailFile = Path(path)
+            require(SystemFileSystem.exists(thumbnailFile)) { "音频封面不存在：$path" }
+            MultipartFile(
+                fieldName = "thumbnail",
+                fileName = thumbnailFile.name,
+                contentType = ContentType.Image.JPEG.toString(),
+                bytes = SystemFileSystem.source(thumbnailFile).buffered().use { it.readByteArray() },
+            )
+        }
     if (isLocalBotApiServer) {
         val body =
             buildJsonObject {
                 textFields.forEach { (name, value) -> put(name, value) }
+                thumbnailPath?.let { put("thumbnail", resolveAbsolutePath(it)) }
                 put(fileFieldName, resolveAbsolutePath(filePath))
             }
         execute(method, body, Message.serializer())
@@ -143,6 +158,7 @@ private suspend fun TelegramBotClient.deliverMedia(
             fileName = fileName,
             fileContentType = fileContentType,
             fileBytes = fileBytes,
+            extraFile = thumbnail,
         )
 
     val response =
@@ -157,6 +173,13 @@ private suspend fun TelegramBotClient.deliverMedia(
         "Telegram 媒体上传失败：${telegramResponse.errorCode} ${telegramResponse.description}"
     }
 }
+
+private data class MultipartFile(
+    val fieldName: String,
+    val fileName: String,
+    val contentType: String,
+    val bytes: ByteArray,
+)
 
 /** 本地 Bot API Server 要求绝对路径；相对路径基于进程工作目录解析。 */
 @OptIn(ExperimentalForeignApi::class)
@@ -173,6 +196,7 @@ private fun buildMultipartBody(
     fileName: String,
     fileContentType: String,
     fileBytes: ByteArray,
+    extraFile: MultipartFile? = null,
 ): ByteArray {
     val buffer = Buffer()
     for ((name, value) in textFields) {
@@ -186,6 +210,13 @@ private fun buildMultipartBody(
     buffer.write("Content-Type: $fileContentType\r\n\r\n".encodeToByteArray())
     buffer.write(fileBytes)
     buffer.write("\r\n".encodeToByteArray())
+    extraFile?.let { file ->
+        buffer.write("--$boundary\r\n".encodeToByteArray())
+        buffer.write("Content-Disposition: form-data; name=\"${file.fieldName}\"; filename=\"${file.fileName}\"\r\n".encodeToByteArray())
+        buffer.write("Content-Type: ${file.contentType}\r\n\r\n".encodeToByteArray())
+        buffer.write(file.bytes)
+        buffer.write("\r\n".encodeToByteArray())
+    }
     buffer.write("--$boundary--\r\n".encodeToByteArray())
     return buffer.readByteArray()
 }
