@@ -26,9 +26,11 @@ import kotlinx.serialization.json.put
 import moe.yumeyuka.yumebot.common.nowMillis
 import platform.posix.getcwd
 
-suspend fun TelegramBotClient.sendMessage(request: SendMessageRequest): Message = execute("sendMessage", request)
+suspend fun TelegramBotClient.sendMessage(request: SendMessageRequest): Message =
+    execute("sendMessage", request.copy(text = request.text.withoutChineseFullStops()))
 
-suspend fun TelegramBotClient.sendPhoto(request: SendPhotoRequest): Message = execute("sendPhoto", request)
+suspend fun TelegramBotClient.sendPhoto(request: SendPhotoRequest): Message =
+    execute("sendPhoto", request.copy(caption = request.caption?.withoutChineseFullStops()))
 
 suspend fun TelegramBotClient.sendVideoFile(
     chatId: TelegramId,
@@ -49,7 +51,7 @@ suspend fun TelegramBotClient.sendVideoFile(
             durationSeconds?.let { put("duration", it.toString()) }
             parseMode?.let { put("parse_mode", it) }
             if (!caption.isNullOrBlank()) {
-                put("caption", caption)
+                put("caption", caption.withoutChineseFullStops())
             }
             put("supports_streaming", "true")
         }
@@ -89,7 +91,7 @@ suspend fun TelegramBotClient.sendAudioFile(
             performer?.let { put("performer", it) }
             parseMode?.let { put("parse_mode", it) }
             if (!caption.isNullOrBlank()) {
-                put("caption", caption)
+                put("caption", caption.withoutChineseFullStops())
             }
         }
 
@@ -234,7 +236,8 @@ suspend fun TelegramBotClient.deleteMessage(
         ),
     )
 
-suspend fun TelegramBotClient.answerCallbackQuery(request: AnswerCallbackQueryRequest): Boolean = execute("answerCallbackQuery", request)
+suspend fun TelegramBotClient.answerCallbackQuery(request: AnswerCallbackQueryRequest): Boolean =
+    execute("answerCallbackQuery", request.copy(text = request.text?.withoutChineseFullStops()))
 
 suspend fun TelegramBotClient.answerCallbackQuery(
     callbackQueryId: String,
@@ -248,6 +251,8 @@ suspend fun TelegramBotClient.answerCallbackQuery(
             showAlert = showAlert,
         ),
     )
+
+private fun String.withoutChineseFullStops(): String = replace("。", "")
 
 suspend fun TelegramBotClient.sendMessage(
     chatId: TelegramId,

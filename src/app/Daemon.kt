@@ -30,7 +30,7 @@ class Daemon {
                             listOf(
                                 BotCommand("start", "获取验证引导"),
                                 BotCommand("ban", "封禁违规用户 (仅管理员)"),
-                                BotCommand("pass", "直接通过成员验证 (仅管理员)"),
+                                BotCommand("pass", "通过成员验证 (仅管理员)"),
                                 BotCommand("bili_login", "登录哔哩哔哩以解析更高画质"),
                             ),
                         )

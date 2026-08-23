@@ -27,7 +27,7 @@ class TelegramMarkupFactory(
                 listOf(
                     listOf(
                         InlineKeyboardButton(
-                            text = "直接通过",
+                            text = "通过",
                             callbackData = "admin_pass:$targetUserId",
                         ),
                         InlineKeyboardButton(

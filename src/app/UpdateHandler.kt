@@ -96,7 +96,7 @@ class BotUpdateHandler(
             if (!isAdmin) {
                 botClient.answerCallbackQuery(
                     callbackQueryId = callbackQuery.id,
-                    text = "只有拥有封禁/限制权限的管理员才能直接通过。",
+                    text = "只有拥有封禁/限制权限的管理员才能通过。",
                     showAlert = true,
                 )
                 return
@@ -104,7 +104,7 @@ class BotUpdateHandler(
 
             botClient.answerCallbackQuery(
                 callbackQueryId = callbackQuery.id,
-                text = "已直接通过该成员验证。",
+                text = "已通过该成员验证。",
             )
 
             val success =
