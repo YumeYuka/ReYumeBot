@@ -4,6 +4,7 @@ import common.logger
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.curl.Curl
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -13,6 +14,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import io.ktor.utils.io.readTo
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.CancellationException
@@ -42,7 +44,6 @@ private const val MAX_QUALITY = 120
 private const val DASH_FNVAL = 4048
 private const val DOWNLOAD_MAX_ATTEMPTS = 4
 private const val DOWNLOAD_RETRY_BASE_DELAY_MILLIS = 1_000L
-private const val DOWNLOAD_CHUNK_SIZE = 256 * 1024L
 
 private val bvidPattern = Regex("(?i)BV[0-9A-Za-z]{10}")
 private val avidPattern = Regex("(?i)av(\\d+)")
@@ -123,7 +124,7 @@ class BilibiliService(
         HttpClient(Curl) {
             expectSuccess = false
             install(HttpTimeout) {
-                requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
                 connectTimeoutMillis = 15_000L
                 socketTimeoutMillis = 120_000L
             }
@@ -510,13 +511,8 @@ class BilibiliService(
                 expectedTotal = if (appending && contentLength > 0) resumeFrom + contentLength else contentLength
                 if (!appending && resumeFrom > 0 && SystemFileSystem.exists(outputPath)) SystemFileSystem.delete(outputPath)
                 val channel = response.bodyAsChannel()
-                val buffer = ByteArray(DOWNLOAD_CHUNK_SIZE.toInt())
                 SystemFileSystem.sink(outputPath, append = appending).buffered().use { sink ->
-                    while (true) {
-                        val read = channel.readAvailable(buffer, 0, buffer.size)
-                        if (read == -1) break
-                        if (read > 0) sink.write(buffer, 0, read)
-                    }
+                    channel.readTo(sink)
                 }
             }
         val actualSize = fileSize(outputPath)
