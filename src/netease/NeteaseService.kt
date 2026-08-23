@@ -36,6 +36,7 @@ private const val DEFAULT_MAX_AUDIO_BYTES = 48L * 1024 * 1024
 private const val LOCAL_API_MAX_AUDIO_BYTES = 1900L * 1024 * 1024
 
 private val QUALITY_LEVELS = listOf("hires", "lossless", "higher", "standard")
+private val musicUCookiePattern = Regex("(?:^|;\\s*)MUSIC_U=([^;]+)", RegexOption.IGNORE_CASE)
 
 private val shortLinkPattern = Regex("https?://(?:[a-z0-9-]+\\.)?163cn\\.(?:tv|link)/[^\\s<>()]+", RegexOption.IGNORE_CASE)
 private val neteaseUrlPattern = Regex("https?://(?:[a-z0-9-]+\\.)?music\\.163\\.com/[^\\s<>()]+", RegexOption.IGNORE_CASE)
@@ -215,7 +216,9 @@ class NeteaseService(
             }
         val code = root.int("code")
         if (code != 200) {
-            error("网易云接口请求失败（错误码 $code）。")
+            val message = root.string("message").ifBlank { root.string("msg") }
+            val suffix = message.takeIf(String::isNotBlank)?.let { "，$it" }.orEmpty()
+            error("网易云接口请求失败（接口 $path，错误码 $code$suffix）。")
         }
         return root
     }
@@ -230,13 +233,18 @@ class NeteaseService(
         return buildString {
             append("appver=8.9.70; buildver=$buildver; resolution=1920x1080; os=android; ")
             append("NMTID=").append(randomNmtid()).append("; ")
-            val accountCookie = musicU?.trim().orEmpty()
+            val accountCookie = extractMusicUValue(musicU)
             if (accountCookie.isNotEmpty()) {
                 append("MUSIC_U=").append(accountCookie)
             } else {
                 append("MUSIC_A=").append(ANONYMOUS_TOKEN)
             }
         }
+    }
+
+    private fun extractMusicUValue(rawCookie: String?): String {
+        val value = rawCookie?.trim()?.trim('`', '"', '\'').orEmpty()
+        return musicUCookiePattern.find(value)?.groupValues?.get(1)?.trim().orEmpty().ifBlank { value }
     }
 
     private fun randomNmtid(): String {
