@@ -32,6 +32,13 @@ The Compose configuration persists Bilibili login credentials and temporary down
 
 Restricted, paid, member-only, and region-restricted videos are only handled when the configured account may legitimately access their streams. The bot does not bypass Bilibili access controls.
 
+## NetEase Cloud Music Delivery
+
+- Send a NetEase song URL (`music.163.com/song?id=...`, mobile/hash variants) or a `163cn.tv` / `163cn.link` short link in a chat; the bot automatically resolves and sends the audio.
+- Requests are signed with the EAPI scheme (pure-Kotlin AES-128-ECB + MD5, no native crypto dependency) and use an anonymous visitor token — no login required.
+- Quality is requested at the highest level that fits Telegram's 50 MB upload limit, falling back `hires → exhigh → standard` as needed. VIP-only / removed tracks report a clear error.
+- The audio message carries title/performer metadata and an HTML caption with song, album, size/bitrate info and a `via @<bot>` attribution. Only single tracks are supported (no playlists/albums).
+
 ## Build from Source
 
 Built with Amper.

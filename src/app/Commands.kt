@@ -15,6 +15,7 @@ class CommandHandler(
     private val verificationService: VerificationService,
     private val markupFactory: TelegramMarkupFactory,
     private val bilibiliMessageHandler: BilibiliMessageHandler,
+    private val neteaseMessageHandler: NeteaseMessageHandler,
 ) {
     private val logger = logger<CommandHandler>()
 
@@ -27,6 +28,7 @@ class CommandHandler(
         when {
             text.startsWith("/start") -> sendStartGuide(botClient, config, message)
             bilibiliMessageHandler.handleMessage(botClient, config, message) -> Unit
+            neteaseMessageHandler.handleMessage(botClient, message) -> Unit
             text.startsWith("/ban") -> handleBanCommand(botClient, message)
             text.startsWith("/通过") || text.startsWith("/pass") || text.startsWith("/approve") ->
                 handlePassCommand(botClient, message)

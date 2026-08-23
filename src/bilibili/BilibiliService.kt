@@ -1,23 +1,19 @@
 package bilibili
 
+import common.MediaDownloader
 import common.logger
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.curl.Curl
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
-import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
-import io.ktor.utils.io.readTo
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
@@ -42,8 +38,6 @@ private const val LOGIN_POLL_DELAY_MILLIS = 2_000L
 private const val LOGIN_TIMEOUT_MILLIS = 180_000L
 private const val MAX_QUALITY = 120
 private const val DASH_FNVAL = 4048
-private const val DOWNLOAD_MAX_ATTEMPTS = 4
-private const val DOWNLOAD_RETRY_BASE_DELAY_MILLIS = 1_000L
 
 private val bvidPattern = Regex("(?i)BV[0-9A-Za-z]{10}")
 private val avidPattern = Regex("(?i)av(\\d+)")
@@ -118,17 +112,8 @@ class BilibiliService(
             }
         }
 
-    // Media downloads run on a separate client: no overall request timeout (files can be
-    // hundreds of MB), only connect/socket (stall) timeouts guard against dead connections.
-    private val mediaHttpClient =
-        HttpClient(Curl) {
-            expectSuccess = false
-            install(HttpTimeout) {
-                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                connectTimeoutMillis = 15_000L
-                socketTimeoutMillis = 120_000L
-            }
-        }
+    // 媒体下载走共享下载器：不限总时长、Range 断点续传、完整性校验。
+    private val mediaDownloader = MediaDownloader("B站媒体")
 
     fun extractVideoUrl(text: String): String? =
         b23Pattern.find(text)?.value ?: videoPattern.find(text)?.value
@@ -418,12 +403,12 @@ class BilibiliService(
         val videoPath = Path(outputPath.parent!!, "${outputPath.name}.video.m4s")
         val audioPath = Path(outputPath.parent!!, "${outputPath.name}.audio.m4s")
         try {
-            downloadFile(streams.videoUrl, videoPath, referer, cookieHeader)
+            downloadMedia(streams.videoUrl, videoPath, referer, cookieHeader)
             if (streams.audioUrl == null) {
                 remuxVideo(videoPath, outputPath)
                 return
             }
-            downloadFile(streams.audioUrl, audioPath, referer, cookieHeader)
+            downloadMedia(streams.audioUrl, audioPath, referer, cookieHeader)
             remuxVideo(videoPath, audioPath, outputPath)
             verifyAudioStream(outputPath)
         } finally {
@@ -462,67 +447,12 @@ class BilibiliService(
         require(result == 0) { "合并后的视频没有可解码的音频轨道。" }
     }
 
-    private suspend fun downloadFile(
+    private suspend fun downloadMedia(
         url: String,
         outputPath: Path,
         referer: String,
         cookieHeader: String,
-    ) {
-        var attempt = 0
-        while (true) {
-            attempt++
-            val resumeFrom = fileSize(outputPath)
-            try {
-                streamToFile(url, outputPath, referer, cookieHeader, resumeFrom)
-                return
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                if (attempt >= DOWNLOAD_MAX_ATTEMPTS) {
-                    if (SystemFileSystem.exists(outputPath)) SystemFileSystem.delete(outputPath)
-                    throw IllegalStateException("B站媒体下载失败（重试 $DOWNLOAD_MAX_ATTEMPTS 次后放弃）：${error.message}")
-                }
-                logger.warn("Bilibili media download attempt $attempt failed, resuming at ${fileSize(outputPath)} bytes: ${error.message}")
-                delay(DOWNLOAD_RETRY_BASE_DELAY_MILLIS * attempt)
-            }
-        }
-    }
-
-    private suspend fun streamToFile(
-        url: String,
-        outputPath: Path,
-        referer: String,
-        cookieHeader: String,
-        resumeFrom: Long,
-    ) {
-        var expectedTotal = -1L
-        mediaHttpClient
-            .prepareGet(url) {
-                applyHeaders(referer, cookieHeader)
-                if (resumeFrom > 0) header(HttpHeaders.Range, "bytes=$resumeFrom-")
-            }.execute { response ->
-                val appending = resumeFrom > 0 && response.status.value == 206
-                when (response.status.value) {
-                    in 200..299 -> Unit
-                    403, 410 -> error("B站媒体下载地址已过期（${response.status.value}）。")
-                    416 -> error("B站媒体下载范围请求被拒绝（416）。")
-                    else -> error("B站媒体下载失败：${response.status.value}")
-                }
-                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
-                expectedTotal = if (appending && contentLength > 0) resumeFrom + contentLength else contentLength
-                if (!appending && resumeFrom > 0 && SystemFileSystem.exists(outputPath)) SystemFileSystem.delete(outputPath)
-                val channel = response.bodyAsChannel()
-                SystemFileSystem.sink(outputPath, append = appending).buffered().use { sink ->
-                    channel.readTo(sink)
-                }
-            }
-        val actualSize = fileSize(outputPath)
-        require(actualSize > 0) { "B站媒体下载结果为空。" }
-        if (expectedTotal > 0) {
-            require(actualSize >= expectedTotal) { "B站媒体下载不完整：$actualSize/$expectedTotal 字节。" }
-        }
-    }
-
-    private fun fileSize(path: Path): Long = if (SystemFileSystem.exists(path)) SystemFileSystem.metadataOrNull(path)?.size ?: 0L else 0L
+    ) = mediaDownloader.download(url, outputPath) { applyHeaders(referer, cookieHeader) }
 
     private fun saveCredentials(credentials: BilibiliCredentials) {
         require(credentials.asCookieHeader().isNotBlank()) { "B站登录未返回有效 Cookie。" }
@@ -560,7 +490,7 @@ class BilibiliService(
 
     override fun close() {
         httpClient.close()
-        mediaHttpClient.close()
+        mediaDownloader.close()
     }
 }
 
