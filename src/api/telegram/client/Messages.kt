@@ -13,12 +13,17 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.toKString
 import kotlinx.io.Buffer
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readByteArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import moe.yumeyuka.yumebot.common.nowMillis
+import platform.posix.getcwd
 
 suspend fun TelegramBotClient.sendMessage(request: SendMessageRequest): Message = execute("sendMessage", request)
 
@@ -34,10 +39,8 @@ suspend fun TelegramBotClient.sendVideoFile(
 ) {
     val videoPath = Path(filePath)
     require(SystemFileSystem.exists(videoPath)) { "视频文件不存在：$filePath" }
-    val videoBytes = SystemFileSystem.source(videoPath).buffered().use { it.readByteArray() }
     val fileName = videoPath.name
 
-    val boundary = "----ReYumeBotBoundary${nowMillis()}"
     val textFields =
         buildMap {
             put("chat_id", chatId.toString())
@@ -50,27 +53,14 @@ suspend fun TelegramBotClient.sendVideoFile(
             put("supports_streaming", "true")
         }
 
-    val multipartBytes =
-        buildMultipartBody(
-            boundary = boundary,
-            textFields = textFields,
-            fileFieldName = "video",
-            fileName = fileName,
-            fileContentType = ContentType.Video.MP4.toString(),
-            fileBytes = videoBytes,
-        )
-
-    val response =
-        multipartHttpClient.post("$apiBaseUrl/sendVideo") {
-            contentType(ContentType.MultiPart.FormData.withParameter("boundary", boundary))
-            setBody(multipartBytes)
-        }
-    val responseBody = response.bodyAsText()
-    require(response.status.value in 200..299) { "Telegram 视频上传 HTTP 失败：${response.status.value} $responseBody" }
-    val telegramResponse = decodeTelegramResponse(responseBody, Message.serializer())
-    require(telegramResponse.ok && telegramResponse.result != null) {
-        "Telegram 视频上传失败：${telegramResponse.errorCode} ${telegramResponse.description}"
-    }
+    deliverMedia(
+        method = "sendVideo",
+        fileFieldName = "video",
+        filePath = filePath,
+        fileName = fileName,
+        fileContentType = ContentType.Video.MP4.toString(),
+        textFields = textFields,
+    )
 }
 
 suspend fun TelegramBotClient.sendAudioFile(
@@ -85,7 +75,6 @@ suspend fun TelegramBotClient.sendAudioFile(
 ) {
     val audioPath = Path(filePath)
     require(SystemFileSystem.exists(audioPath)) { "音频文件不存在：$filePath" }
-    val audioBytes = SystemFileSystem.source(audioPath).buffered().use { it.readByteArray() }
     val fileName = audioPath.name
 
     val boundary = "----ReYumeBotBoundary${nowMillis()}"
@@ -110,27 +99,70 @@ suspend fun TelegramBotClient.sendAudioFile(
             "ogg" -> "audio/ogg"
             else -> "application/octet-stream"
         }
+
+    deliverMedia(
+        method = "sendAudio",
+        fileFieldName = "audio",
+        filePath = filePath,
+        fileName = fileName,
+        fileContentType = contentType,
+        textFields = textFields,
+    )
+}
+
+/**
+ * 统一发送媒体文件：本地 Bot API Server 模式直接传绝对路径（服务器自行读盘上传，零内存占用，上限 2GB）；
+ * 官方 API 模式走 multipart 上传（文件整体进内存，上限 50MB）。
+ */
+private suspend fun TelegramBotClient.deliverMedia(
+    method: String,
+    fileFieldName: String,
+    filePath: String,
+    fileName: String,
+    fileContentType: String,
+    textFields: Map<String, String>,
+) {
+    if (isLocalBotApiServer) {
+        val body =
+            buildJsonObject {
+                textFields.forEach { (name, value) -> put(name, value) }
+                put(fileFieldName, resolveAbsolutePath(filePath))
+            }
+        execute(method, body, Message.serializer())
+        return
+    }
+
+    val fileBytes = SystemFileSystem.source(Path(filePath)).buffered().use { it.readByteArray() }
+    val boundary = "----ReYumeBotBoundary${nowMillis()}"
     val multipartBytes =
         buildMultipartBody(
             boundary = boundary,
             textFields = textFields,
-            fileFieldName = "audio",
+            fileFieldName = fileFieldName,
             fileName = fileName,
-            fileContentType = contentType,
-            fileBytes = audioBytes,
+            fileContentType = fileContentType,
+            fileBytes = fileBytes,
         )
 
     val response =
-        multipartHttpClient.post("$apiBaseUrl/sendAudio") {
+        multipartHttpClient.post("$apiBaseUrl/$method") {
             contentType(ContentType.MultiPart.FormData.withParameter("boundary", boundary))
             setBody(multipartBytes)
         }
     val responseBody = response.bodyAsText()
-    require(response.status.value in 200..299) { "Telegram 音频上传 HTTP 失败：${response.status.value} $responseBody" }
+    require(response.status.value in 200..299) { "Telegram 媒体上传 HTTP 失败：${response.status.value} $responseBody" }
     val telegramResponse = decodeTelegramResponse(responseBody, Message.serializer())
     require(telegramResponse.ok && telegramResponse.result != null) {
-        "Telegram 音频上传失败：${telegramResponse.errorCode} ${telegramResponse.description}"
+        "Telegram 媒体上传失败：${telegramResponse.errorCode} ${telegramResponse.description}"
     }
+}
+
+/** 本地 Bot API Server 要求绝对路径；相对路径基于进程工作目录解析。 */
+@OptIn(ExperimentalForeignApi::class)
+private fun resolveAbsolutePath(path: String): String {
+    if (path.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(path)) return path
+    val cwd = getcwd(null, 0)?.toKString()?.replace('\\', '/')?.trimEnd('/') ?: return path
+    return "$cwd/$path"
 }
 
 private fun buildMultipartBody(

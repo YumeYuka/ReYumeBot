@@ -16,10 +16,11 @@ class Daemon {
         val config = getConfig().also { logger.info("Config loaded: miniAppUrl=${it.miniAppUrl}") }
 
         BilibiliService().use { bilibiliService ->
-            NeteaseService().use { neteaseService ->
-                TelegramBotClient(config.botToken).use { botClient ->
+            NeteaseService(maxAudioBytes = NeteaseService.maxAudioBytes(config.telegramApiBaseUrl != null)).use { neteaseService ->
+                TelegramBotClient(config.botToken, baseUrl = config.telegramApiBaseUrl).use { botClient ->
                     val botUsername = botClient.getMe().username
                     logger.info("Bot username: ${botUsername ?: "unknown"}")
+                    logger.info("Telegram endpoint: ${config.telegramApiBaseUrl ?: "https://api.telegram.org"}")
 
                     runCatching {
                         botClient.setMyCommands(
@@ -28,7 +29,7 @@ class Daemon {
                                 BotCommand("ban", "封禁违规用户 (仅管理员)"),
                                 BotCommand("pass", "直接通过成员验证 (仅管理员)"),
                                 BotCommand("bili_login", "登录哔哩哔哩以解析更高画质"),
-                            )
+                            ),
                         )
                         logger.info("Bot commands registered successfully")
                     }.onFailure { error ->

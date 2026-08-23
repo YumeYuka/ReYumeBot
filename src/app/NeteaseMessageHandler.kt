@@ -107,8 +107,14 @@ class NeteaseMessageHandler(
                 val tenths = (bytes * 10) / (1024 * 1024)
                 "${tenths / 10}.${tenths % 10}MB"
             }
-            bytes > 0 -> "${bytes / 1024}KB"
-            else -> "大小未知"
+
+            bytes > 0 -> {
+                "${bytes / 1024}KB"
+            }
+
+            else -> {
+                "大小未知"
+            }
         }
 
     private fun escapeHtml(text: String): String =

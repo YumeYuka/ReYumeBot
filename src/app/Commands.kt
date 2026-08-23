@@ -26,12 +26,25 @@ class CommandHandler(
     ) {
         val text = message.text?.trim() ?: return
         when {
-            text.startsWith("/start") -> sendStartGuide(botClient, config, message)
-            bilibiliMessageHandler.handleMessage(botClient, config, message) -> Unit
-            neteaseMessageHandler.handleMessage(botClient, message) -> Unit
-            text.startsWith("/ban") -> handleBanCommand(botClient, message)
-            text.startsWith("/通过") || text.startsWith("/pass") || text.startsWith("/approve") ->
+            text.startsWith("/start") -> {
+                sendStartGuide(botClient, config, message)
+            }
+
+            bilibiliMessageHandler.handleMessage(botClient, config, message) -> {
+                Unit
+            }
+
+            neteaseMessageHandler.handleMessage(botClient, message) -> {
+                Unit
+            }
+
+            text.startsWith("/ban") -> {
+                handleBanCommand(botClient, message)
+            }
+
+            text.startsWith("/通过") || text.startsWith("/pass") || text.startsWith("/approve") -> {
                 handlePassCommand(botClient, message)
+            }
         }
     }
 
@@ -89,7 +102,7 @@ class CommandHandler(
                         userChatId = message.chat.id,
                         promptMessageId = guideMessage.messageId,
                         testOnly = true,
-                    )
+                    ),
                 )
             }
         }
@@ -100,24 +113,24 @@ class CommandHandler(
         pendingJoinRequest: PendingJoinRequest,
         privateChatId: Long,
     ) {
-        val previousMessageIds = buildSet {
-            if (pendingJoinRequest.guideChatId == privateChatId) {
-                pendingJoinRequest.guideMessageId?.let(::add)
+        val previousMessageIds =
+            buildSet {
+                if (pendingJoinRequest.guideChatId == privateChatId) {
+                    pendingJoinRequest.guideMessageId?.let(::add)
+                }
+                if (pendingJoinRequest.testOnly && pendingJoinRequest.promptChatId == privateChatId) {
+                    pendingJoinRequest.promptMessageId?.let(::add)
+                }
             }
-            if (pendingJoinRequest.testOnly && pendingJoinRequest.promptChatId == privateChatId) {
-                pendingJoinRequest.promptMessageId?.let(::add)
-            }
-        }
 
         previousMessageIds.forEach { messageId ->
             runCatching {
                 botClient.deleteMessage(privateChatId, messageId)
+            }.onFailure { error ->
+                logger.warn(
+                    "Delete old verification guide failed: chatId=$privateChatId, messageId=$messageId, error=${error.message}",
+                )
             }
-                .onFailure { error ->
-                    logger.warn(
-                        "Delete old verification guide failed: chatId=$privateChatId, messageId=$messageId, error=${error.message}"
-                    )
-                }
         }
     }
 
@@ -132,7 +145,7 @@ class CommandHandler(
                 messageThreadId = message.messageThreadId,
             )
             logger.warn(
-                "Ban command denied: chatId=${message.chat.id}, commandMessageId=${message.messageId}, fromUserId=${message.from?.id}"
+                "Ban command denied: chatId=${message.chat.id}, commandMessageId=${message.messageId}, fromUserId=${message.from?.id}",
             )
             return
         }
@@ -153,10 +166,15 @@ class CommandHandler(
             val mentionEntity = message.entities?.firstOrNull { it.type == "mention" }
             val mentionedUsername =
                 if (mentionEntity != null && text.length >= mentionEntity.offset + mentionEntity.length) {
-                    text.substring(mentionEntity.offset, mentionEntity.offset + mentionEntity.length)
+                    text
+                        .substring(mentionEntity.offset, mentionEntity.offset + mentionEntity.length)
                         .removePrefix("@")
                 } else {
-                    text.split("\\s+".toRegex()).drop(1).firstOrNull()?.removePrefix("@")
+                    text
+                        .split("\\s+".toRegex())
+                        .drop(1)
+                        .firstOrNull()
+                        ?.removePrefix("@")
                 }
 
             if (!mentionedUsername.isNullOrBlank()) {
@@ -195,22 +213,20 @@ class CommandHandler(
                     untilDate = PERMANENT_BAN_UNTIL_DATE,
                     revokeMessages = true,
                 )
-            }
-                .onFailure { error ->
-                    logger.error(
-                        "Ban member failed: chatId=${message.chat.id}, userId=$banTargetUserId, error=${error.message}"
-                    )
-                    botClient.sendMessage(
-                        chatId = message.chat.id,
-                        text = "封禁失败：${error.message}",
-                        messageThreadId = message.messageThreadId,
-                    )
-                }
-                .getOrDefault(false)
+            }.onFailure { error ->
+                logger.error(
+                    "Ban member failed: chatId=${message.chat.id}, userId=$banTargetUserId, error=${error.message}",
+                )
+                botClient.sendMessage(
+                    chatId = message.chat.id,
+                    text = "封禁失败：${error.message}",
+                    messageThreadId = message.messageThreadId,
+                )
+            }.getOrDefault(false)
 
         if (success) {
             logger.info(
-                "User banned: chatId=${message.chat.id}, userId=$banTargetUserId, commandMessageId=${message.messageId}"
+                "User banned: chatId=${message.chat.id}, userId=$banTargetUserId, commandMessageId=${message.messageId}",
             )
             deleteBanMessages(botClient, message, banTargetMessageId)
         }
@@ -227,7 +243,7 @@ class CommandHandler(
                 messageThreadId = message.messageThreadId,
             )
             logger.warn(
-                "Pass command denied: chatId=${message.chat.id}, commandMessageId=${message.messageId}, fromUserId=${message.from?.id}"
+                "Pass command denied: chatId=${message.chat.id}, commandMessageId=${message.messageId}, fromUserId=${message.from?.id}",
             )
             return
         }
@@ -247,10 +263,15 @@ class CommandHandler(
             val mentionEntity = message.entities?.firstOrNull { it.type == "mention" }
             val mentionedUsername =
                 if (mentionEntity != null && text.length >= mentionEntity.offset + mentionEntity.length) {
-                    text.substring(mentionEntity.offset, mentionEntity.offset + mentionEntity.length)
+                    text
+                        .substring(mentionEntity.offset, mentionEntity.offset + mentionEntity.length)
                         .removePrefix("@")
                 } else {
-                    text.split("\\s+".toRegex()).drop(1).firstOrNull()?.removePrefix("@")
+                    text
+                        .split("\\s+".toRegex())
+                        .drop(1)
+                        .firstOrNull()
+                        ?.removePrefix("@")
                 }
 
             if (!mentionedUsername.isNullOrBlank()) {
@@ -291,7 +312,7 @@ class CommandHandler(
 
         if (success) {
             logger.info(
-                "User approved via command: chatId=${message.chat.id}, userId=$targetUserId, commandMessageId=${message.messageId}"
+                "User approved via command: chatId=${message.chat.id}, userId=$targetUserId, commandMessageId=${message.messageId}",
             )
             runCatching {
                 botClient.deleteMessage(message.chat.id, message.messageId)
@@ -310,21 +331,21 @@ class CommandHandler(
         commandMessage: Message,
         banTargetMessageId: Long?,
     ) {
-        val messageIds = buildList {
-            add(commandMessage.messageId)
-            if (banTargetMessageId != null) {
-                add(banTargetMessageId)
+        val messageIds =
+            buildList {
+                add(commandMessage.messageId)
+                if (banTargetMessageId != null) {
+                    add(banTargetMessageId)
+                }
             }
-        }
         messageIds.forEach { messageId ->
             runCatching {
                 botClient.deleteMessage(commandMessage.chat.id, messageId)
+            }.onFailure { error ->
+                logger.warn(
+                    "Delete ban message failed: chatId=${commandMessage.chat.id}, messageId=$messageId, error=${error.message}",
+                )
             }
-                .onFailure { error ->
-                    logger.warn(
-                        "Delete ban message failed: chatId=${commandMessage.chat.id}, messageId=$messageId, error=${error.message}"
-                    )
-                }
         }
     }
 
@@ -336,13 +357,11 @@ class CommandHandler(
         val chatMember =
             runCatching {
                 botClient.getChatMember(message.chat.id, operatorUserId)
-            }
-                .onFailure { error ->
-                    logger.warn(
-                        "Check ban permission failed: chatId=${message.chat.id}, userId=$operatorUserId, error=${error.message}"
-                    )
-                }
-                .getOrNull() ?: return false
+            }.onFailure { error ->
+                logger.warn(
+                    "Check ban permission failed: chatId=${message.chat.id}, userId=$operatorUserId, error=${error.message}",
+                )
+            }.getOrNull() ?: return false
 
         return chatMember.status == "creator" ||
             (chatMember.status == "administrator" && chatMember.canRestrictMembers == true)

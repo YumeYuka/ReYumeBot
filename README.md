@@ -10,9 +10,24 @@ A lightweight, native Telegram bot for group member verification, moderation, an
 BOT_TOKEN=your_bot_token
 MINI_APP_URL=https://verify.example.com
 BILIBILI_ADMIN_ID=123456789
+
+# Optional: enable the built-in local telegram-bot-api server (upload limit 50MB → 2GB).
+# Get these from https://my.telegram.org/apps (any Telegram account can create one app).
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
+# Optional overrides (defaults shown):
+# TELEGRAM_API_PORT=8081
+# TELEGRAM_API_BASE_URL=http://127.0.0.1:8081
 ```
 
 `BILIBILI_ADMIN_ID` is the Telegram numeric user ID allowed to use `/bili_login`. Keep this value private and do not configure it as a group ID.
+
+When `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are both set, the container entrypoint starts a local
+[telegram-bot-api](https://github.com/tdlib/telegram-bot-api) server (prebuilt binary from
+`aiogram/telegram-bot-api`, no tdlib compilation needed) and points the bot at it. In this local mode
+media files are sent by absolute file path — the API server streams them from disk itself, so memory
+usage stays flat even for large files, and the upload limit rises from 50MB to 2GB. When they are
+absent, the bot talks to `api.telegram.org` directly exactly as before.
 
 ### 2. Run
 

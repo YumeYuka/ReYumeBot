@@ -44,15 +44,20 @@ fun telegramBotDefaultJson(): Json = Json {
 }
 
 private const val TELEGRAM_REQUEST_TIMEOUT_MILLIS = 75_000L
+private const val TELEGRAM_LOCAL_REQUEST_TIMEOUT_MILLIS = 600_000L
 private const val TELEGRAM_CONNECT_TIMEOUT_MILLIS = 10_000L
 
-private fun createTelegramHttpClient(json: Json): HttpClient =
+private fun createTelegramHttpClient(
+    json: Json,
+    localServer: Boolean = false,
+): HttpClient =
     HttpClient(Curl) {
         expectSuccess = false
         install(HttpTimeout) {
-            requestTimeoutMillis = TELEGRAM_REQUEST_TIMEOUT_MILLIS
+            // 本地 Bot API Server 代传大文件时，请求会阻塞到服务器端上传完成，放宽总超时
+            requestTimeoutMillis = if (localServer) TELEGRAM_LOCAL_REQUEST_TIMEOUT_MILLIS else TELEGRAM_REQUEST_TIMEOUT_MILLIS
             connectTimeoutMillis = TELEGRAM_CONNECT_TIMEOUT_MILLIS
-            socketTimeoutMillis = TELEGRAM_REQUEST_TIMEOUT_MILLIS
+            socketTimeoutMillis = if (localServer) TELEGRAM_LOCAL_REQUEST_TIMEOUT_MILLIS else TELEGRAM_REQUEST_TIMEOUT_MILLIS
         }
         install(ContentNegotiation) {
             json(json)
@@ -90,6 +95,7 @@ private class KtorTelegramBotHttpTransport(
  */
 class TelegramBotClient(
     botToken: String,
+    baseUrl: String? = null,
     private val json: Json = telegramBotDefaultJson(),
     transport: TelegramBotHttpTransport? = null,
 ) : AutoCloseable {
@@ -101,13 +107,20 @@ class TelegramBotClient(
             require(it.isNotEmpty()) { "Telegram bot token must not be blank" }
         }
 
-    internal val apiBaseUrl = "https://api.telegram.org/bot$token"
+    /** 自建 Bot API Server 地址（如 http://127.0.0.1:8081）；为空时走官方 api.telegram.org。 */
+    private val customBaseUrl = baseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+
+    /** 是否使用本地 Bot API Server（--local 模式支持按绝对路径发送文件，上传上限 2GB）。 */
+    val isLocalBotApiServer: Boolean
+        get() = customBaseUrl != null
+
+    internal val apiBaseUrl = "${customBaseUrl ?: "https://api.telegram.org"}/bot$token"
 
     internal val multipartHttpClient: HttpClient
         get() = httpClient ?: error("Multipart Telegram requests require the default HTTP transport.")
 
     private val httpClient: HttpClient? =
-        if (transport == null) createTelegramHttpClient(json) else null
+        if (transport == null) createTelegramHttpClient(json, isLocalBotApiServer) else null
 
     private val transport: TelegramBotHttpTransport =
         transport

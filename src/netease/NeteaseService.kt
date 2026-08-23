@@ -31,8 +31,9 @@ private const val NETEASE_USER_AGENT =
 private const val ANONYMOUS_TOKEN =
     "4ee5f776c9ed1e4d5f031b09e084c6cb333e43ee4a841afeebbef9bbf4b7e4152b51ff20ecb9e8ee9e89ab23044cf50d1609e4781e805e73a138419e5583bc7fd1e5933c52368d9127ba9ce4e2f233bf5a77ba40ea6045ae1fc612ead95d7b0e0edf70a74334194e1a190979f5fc12e9968c3666a981495b33a649814e309366"
 
-// Telegram Bot API 上传上限 50MB，预留余量；超过则逐级降低音质重试
-private const val MAX_AUDIO_BYTES = 48L * 1024 * 1024
+// 官方 Bot API 上传上限 50MB，预留余量；本地 Bot API Server 模式放宽到约 2GB
+private const val DEFAULT_MAX_AUDIO_BYTES = 48L * 1024 * 1024
+private const val LOCAL_API_MAX_AUDIO_BYTES = 1900L * 1024 * 1024
 
 private val QUALITY_LEVELS = listOf("hires", "exhigh", "standard")
 
@@ -56,6 +57,7 @@ data class NeteaseDownloadedSong(
 
 class NeteaseService(
     private val downloadDirectory: Path = Path("data/netease-downloads"),
+    private val maxAudioBytes: Long = DEFAULT_MAX_AUDIO_BYTES,
 ) : AutoCloseable {
     private val logger = logger<NeteaseService>()
     private val json = Json { ignoreUnknownKeys = true }
@@ -69,6 +71,11 @@ class NeteaseService(
             }
         }
     private val mediaDownloader = MediaDownloader("网易云音频")
+
+    companion object {
+        /** 依据是否启用本地 Bot API Server 选择音频大小上限（官方 50MB / 本地约 2GB）。 */
+        fun maxAudioBytes(localServer: Boolean): Long = if (localServer) LOCAL_API_MAX_AUDIO_BYTES else DEFAULT_MAX_AUDIO_BYTES
+    }
 
     /** 从消息文本中提取网易云链接（163cn.tv/163cn.link 短链或 music.163.com 链接）。 */
     fun extractSongUrl(text: String): String? = shortLinkPattern.find(text)?.value ?: neteaseUrlPattern.find(text)?.value
@@ -171,7 +178,7 @@ class NeteaseService(
                 continue
             }
             val sizeBytes = item.long("size")
-            if (sizeBytes > MAX_AUDIO_BYTES) {
+            if (sizeBytes > maxAudioBytes) {
                 lastFailure = "音频文件（${sizeBytes / 1024 / 1024}MB）超过 Telegram 上传限制。"
                 continue
             }
