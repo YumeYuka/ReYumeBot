@@ -29,19 +29,11 @@ jobs:
             os: ubuntu-latest
             target: linux/app
             artifact_name: reyumebot-linux-x64
-            is_windows: false
-
-          - name: windows-x64
-            os: windows-latest
-            target: windows/app
-            artifact_name: reyumebot-windows-x64.exe
-            is_windows: true
 
           - name: macos-x64-arm64
             os: macos-latest
             target: macos/app
             artifact_name: reyumebot-macos
-            is_windows: false
 
     steps:
       - name: Checkout repository
@@ -54,7 +46,6 @@ jobs:
           java-version: '21'
 
       - name: Configure and Build on Linux/macOS
-        if: ${{ !matrix.is_windows }}
         run: |
           sed -i.bak 's|product:.*|product: ${{ matrix.target }}|' module.yaml
           chmod +x ./kotlin
@@ -65,26 +56,6 @@ jobs:
             find build/tasks -type f -name "*.kexe" -exec cp {} dist/${{ matrix.artifact_name }} \;
           fi
           chmod +x dist/${{ matrix.artifact_name }}
-
-      - name: Configure and Build on Windows
-        if: ${{ matrix.is_windows }}
-        shell: pwsh
-        run: |
-          (Get-Content module.yaml) -replace 'product:.*', 'product: ${{ matrix.target }}' | Set-Content module.yaml
-          .\kotlin.bat build -v release
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $buildRoot = Join-Path $PWD "build"
-          $executables = @(Get-ChildItem -Path $buildRoot -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue)
-          $exe = $executables | Where-Object { $_.FullName -match "(?i)release" } | Select-Object -First 1
-          if (-not $exe) {
-            $exe = $executables | Select-Object -First 1
-          }
-          if (-not $exe) {
-            Write-Host "No Windows executable was produced. Build directory contents:"
-            Get-ChildItem -Path $buildRoot -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-            throw "Could not locate a Windows executable under $buildRoot."
-          }
-          Copy-Item -Path $exe.FullName -Destination "dist/${{ matrix.artifact_name }}"
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4

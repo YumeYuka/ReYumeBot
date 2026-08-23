@@ -34,14 +34,18 @@ fun interface TelegramBotHttpTransport {
      * @return 响应体文本（通常为 JSON）
      * @throws IllegalStateException 当 HTTP 状态非成功时（与默认 Ktor 实现行为一致，便于统一处理）
      */
-    suspend fun post(method: String, body: JsonObject): String
+    suspend fun post(
+        method: String,
+        body: JsonObject,
+    ): String
 }
 
 /** Telegram Bot API 调用端使用的默认 JSON 配置（忽略未知字段、省略显式 null）。 */
-fun telegramBotDefaultJson(): Json = Json {
-    ignoreUnknownKeys = true
-    explicitNulls = false
-}
+fun telegramBotDefaultJson(): Json =
+    Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+    }
 
 private const val TELEGRAM_REQUEST_TIMEOUT_MILLIS = 75_000L
 private const val TELEGRAM_LOCAL_REQUEST_TIMEOUT_MILLIS = 600_000L
@@ -69,7 +73,10 @@ private class KtorTelegramBotHttpTransport(
     private val baseUrl: String,
     private val logger: Logger,
 ) : TelegramBotHttpTransport {
-    override suspend fun post(method: String, body: JsonObject): String {
+    override suspend fun post(
+        method: String,
+        body: JsonObject,
+    ): String {
         val response =
             httpClient.post("$baseUrl/$method") {
                 contentType(ContentType.Application.Json)
@@ -99,7 +106,6 @@ class TelegramBotClient(
     private val json: Json = telegramBotDefaultJson(),
     transport: TelegramBotHttpTransport? = null,
 ) : AutoCloseable {
-
     private val logger = logger<TelegramBotClient>()
 
     private val token =
@@ -186,8 +192,7 @@ class TelegramBotClient(
     fun <T> decodeTelegramResponse(
         payload: String,
         resultSerializer: KSerializer<T>,
-    ): TelegramResponse<T> =
-        json.decodeFromString(TelegramResponse.serializer(resultSerializer), payload)
+    ): TelegramResponse<T> = json.decodeFromString(TelegramResponse.serializer(resultSerializer), payload)
 
     override fun close() {
         httpClient?.close()

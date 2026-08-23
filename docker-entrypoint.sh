@@ -24,7 +24,7 @@ if [ ! -f /app/config.json ]; then
       printf ',\n  "telegram_api_base_url": "%s"' "$escaped_telegram_api_base_url"
     fi
     printf '\n}\n'
-  } > /app/config.json
+  } >/app/config.json
 fi
 
 # 可选：容器内启动本地 telegram-bot-api（上传上限 50MB → 2GB）。

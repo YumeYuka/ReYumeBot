@@ -59,15 +59,15 @@ Restricted, paid, member-only, and region-restricted videos are only handled whe
 Built with Amper.
 
 ```bash
-# Windows
-.\kotlin.bat build -v release
-.\kotlin.bat run
-
 # Linux / macOS
 chmod +x ./kotlin
 ./kotlin build -v release
 ./kotlin run
 ```
+
+The bundled local `telegram-bot-api` server is a Linux container feature only. Linux Docker
+deployments can enable it with `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`; native macOS builds
+use the official Telegram endpoint.
 
 ## Environment Variables
 
