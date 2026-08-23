@@ -27,7 +27,7 @@ private const val NETEASE_ORIGIN = "https://music.163.com"
 private const val NETEASE_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Mobile Safari/537.36"
 
-// 网易云匿名游客 token（无需登录即可获取标准音质）
+// 网易云匿名游客 token（无需登录即可获取公开歌曲）
 private const val ANONYMOUS_TOKEN =
     "4ee5f776c9ed1e4d5f031b09e084c6cb333e43ee4a841afeebbef9bbf4b7e4152b51ff20ecb9e8ee9e89ab23044cf50d1609e4781e805e73a138419e5583bc7fd1e5933c52368d9127ba9ce4e2f233bf5a77ba40ea6045ae1fc612ead95d7b0e0edf70a74334194e1a190979f5fc12e9968c3666a981495b33a649814e309366"
 
@@ -35,7 +35,7 @@ private const val ANONYMOUS_TOKEN =
 private const val DEFAULT_MAX_AUDIO_BYTES = 48L * 1024 * 1024
 private const val LOCAL_API_MAX_AUDIO_BYTES = 1900L * 1024 * 1024
 
-private val QUALITY_LEVELS = listOf("hires", "exhigh", "standard")
+private val QUALITY_LEVELS = listOf("hires", "lossless", "higher", "standard")
 
 private val shortLinkPattern = Regex("https?://(?:[a-z0-9-]+\\.)?163cn\\.(?:tv|link)/[^\\s<>()]+", RegexOption.IGNORE_CASE)
 private val neteaseUrlPattern = Regex("https?://(?:[a-z0-9-]+\\.)?music\\.163\\.com/[^\\s<>()]+", RegexOption.IGNORE_CASE)
@@ -57,6 +57,7 @@ data class NeteaseDownloadedSong(
 
 class NeteaseService(
     private val downloadDirectory: Path = Path("data/netease-downloads"),
+    private val musicU: String? = null,
     private val maxAudioBytes: Long = DEFAULT_MAX_AUDIO_BYTES,
 ) : AutoCloseable {
     private val logger = logger<NeteaseService>()
@@ -229,7 +230,12 @@ class NeteaseService(
         return buildString {
             append("appver=8.9.70; buildver=$buildver; resolution=1920x1080; os=android; ")
             append("NMTID=").append(randomNmtid()).append("; ")
-            append("MUSIC_A=").append(ANONYMOUS_TOKEN)
+            val accountCookie = musicU?.trim().orEmpty()
+            if (accountCookie.isNotEmpty()) {
+                append("MUSIC_U=").append(accountCookie)
+            } else {
+                append("MUSIC_A=").append(ANONYMOUS_TOKEN)
+            }
         }
     }
 

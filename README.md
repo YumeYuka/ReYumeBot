@@ -50,8 +50,8 @@ Restricted, paid, member-only, and region-restricted videos are only handled whe
 ## NetEase Cloud Music Delivery
 
 - Send a NetEase song URL (`music.163.com/song?id=...`, mobile/hash variants) or a `163cn.tv` / `163cn.link` short link in a chat; the bot automatically resolves and sends the audio.
-- Requests are signed with the EAPI scheme (pure-Kotlin AES-128-ECB + MD5, no native crypto dependency) and use an anonymous visitor token — no login required.
-- Quality is requested at the highest level that fits Telegram's 50 MB upload limit, falling back `hires → exhigh → standard` as needed. VIP-only / removed tracks report a clear error.
+- Requests are signed with the EAPI scheme (pure-Kotlin AES-128-ECB + MD5, no native crypto dependency). Without `NETEASE_MUSIC_U`, the bot uses an anonymous visitor token; public songs work without login.
+- Set `NETEASE_MUSIC_U` to the value of the `MUSIC_U` cookie from a logged-in `music.163.com` session to unlock account-authorized lossless/Hi-Res streams. The bot tries `hires → lossless → higher → standard`, selecting the highest available level that fits Telegram's upload limit. VIP-only / removed tracks still require legitimate account access.
 - The audio message carries title/performer metadata and an HTML caption with song, album, size/bitrate info and a `via @<bot>` attribution. Only single tracks are supported (no playlists/albums).
 
 ## Build from Source
@@ -74,3 +74,4 @@ use the official Telegram endpoint.
 - `BOT_TOKEN`: Telegram bot token from @BotFather. Required.
 - `MINI_APP_URL`: Verification WebApp frontend URL. Optional.
 - `BILIBILI_ADMIN_ID`: Telegram numeric user ID permitted to run `/bili_login`. Optional; Bilibili login remains disabled when absent.
+- `NETEASE_MUSIC_U`: NetEase `MUSIC_U` cookie value for account-authorized lossless/Hi-Res streams. Optional; keep it private.

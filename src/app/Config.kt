@@ -16,6 +16,8 @@ data class Config(
     @SerialName("bot_token") val botToken: String,
     @SerialName("mini_app_url") val miniAppUrl: String? = null,
     @SerialName("bilibili_admin_id") val bilibiliAdminId: Long? = null,
+    /** Optional NetEase MUSIC_U cookie; enables account-authorized lossless/Hi-Res streams. */
+    @SerialName("netease_music_u") val neteaseMusicU: String? = null,
     /** 自建 Bot API Server 地址（如 http://127.0.0.1:8081）；为空时走官方 api.telegram.org（上传上限 50MB）。 */
     @SerialName("telegram_api_base_url") val telegramApiBaseUrl: String? = null,
 )
@@ -27,6 +29,7 @@ fun getConfig(): Config {
     val envToken = getEnv("BOT_TOKEN")
     val envMiniAppUrl = getEnv("MINI_APP_URL")
     val envBilibiliAdminId = getEnv("BILIBILI_ADMIN_ID")?.toLongOrNull()
+    val envNeteaseMusicU = getEnv("NETEASE_MUSIC_U")
     val envTelegramApiBaseUrl = getEnv("TELEGRAM_API_BASE_URL")
 
     if (envToken != null) {
@@ -34,6 +37,7 @@ fun getConfig(): Config {
             botToken = envToken,
             miniAppUrl = envMiniAppUrl,
             bilibiliAdminId = envBilibiliAdminId,
+            neteaseMusicU = envNeteaseMusicU,
             telegramApiBaseUrl = envTelegramApiBaseUrl,
         )
     }

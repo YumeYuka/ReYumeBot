@@ -16,7 +16,10 @@ class Daemon {
         val config = getConfig().also { logger.info("Config loaded: miniAppUrl=${it.miniAppUrl}") }
 
         BilibiliService().use { bilibiliService ->
-            NeteaseService(maxAudioBytes = NeteaseService.maxAudioBytes(config.telegramApiBaseUrl != null)).use { neteaseService ->
+            NeteaseService(
+                musicU = config.neteaseMusicU,
+                maxAudioBytes = NeteaseService.maxAudioBytes(config.telegramApiBaseUrl != null),
+            ).use { neteaseService ->
                 TelegramBotClient(config.botToken, baseUrl = config.telegramApiBaseUrl).use { botClient ->
                     val botUsername = botClient.getMe().username
                     logger.info("Bot username: ${botUsername ?: "unknown"}")
