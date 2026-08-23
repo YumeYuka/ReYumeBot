@@ -160,6 +160,38 @@ class VerificationService(private val pendingJoinRequestRepository: PendingJoinR
         return true
     }
 
+    suspend fun manualBanMember(
+        botClient: TelegramBotClient,
+        chatId: Long,
+        targetUserId: Long,
+        adminId: Long?,
+    ): Boolean {
+        val pending = pendingJoinRequestRepository.findByUserId(targetUserId)
+        val currentMember =
+            runCatching {
+                botClient.getChatMember(chatId, targetUserId)
+            }.getOrNull()
+
+        if (currentMember?.status != "kicked") {
+            botClient.banChatMember(
+                chatId = chatId,
+                userId = targetUserId,
+                untilDate = 0,
+                revokeMessages = true,
+            )
+        }
+
+        if (pending != null) {
+            cleanupPendingMessages(botClient, pending)
+            pendingJoinRequestRepository.removeByUserId(targetUserId)
+        }
+
+        logger.info(
+            "Member manually banned by admin: chatId=$chatId, userId=$targetUserId, adminId=$adminId"
+        )
+        return true
+    }
+
     private suspend fun cleanupPendingMessages(
         botClient: TelegramBotClient,
         pendingJoinRequest: PendingJoinRequest,

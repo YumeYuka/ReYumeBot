@@ -120,6 +120,60 @@ class BotUpdateHandler(
                     botClient.deleteMessage(message.chat.id, message.messageId)
                 }
             }
+            return
+        }
+
+        if (data.startsWith("admin_ban:")) {
+            val targetUserId = data.removePrefix("admin_ban:").toLongOrNull()
+            if (targetUserId == null) {
+                botClient.answerCallbackQuery(callbackQuery.id, text = "无效的用户 ID")
+                return
+            }
+
+            val operatorUserId = callbackQuery.from.id
+            val chatMember =
+                runCatching {
+                    botClient.getChatMember(message.chat.id, operatorUserId)
+                }.getOrNull()
+
+            val isAdmin =
+                chatMember?.status == "creator" ||
+                    (chatMember?.status == "administrator" && chatMember.canRestrictMembers == true)
+
+            if (!isAdmin) {
+                botClient.answerCallbackQuery(
+                    callbackQueryId = callbackQuery.id,
+                    text = "只有拥有封禁权限的管理员才能封禁成员。",
+                    showAlert = true,
+                )
+                return
+            }
+
+            val success =
+                runCatching {
+                    verificationService.manualBanMember(
+                        botClient = botClient,
+                        chatId = message.chat.id,
+                        targetUserId = targetUserId,
+                        adminId = operatorUserId,
+                    )
+                }.onFailure { error ->
+                    botClient.answerCallbackQuery(
+                        callbackQueryId = callbackQuery.id,
+                        text = "封禁失败：${error.message ?: "未知错误"}",
+                        showAlert = true,
+                    )
+                }.getOrDefault(false)
+
+            if (success) {
+                botClient.answerCallbackQuery(
+                    callbackQueryId = callbackQuery.id,
+                    text = "已封禁该成员。",
+                )
+                runCatching {
+                    botClient.deleteMessage(message.chat.id, message.messageId)
+                }
+            }
         }
     }
 }

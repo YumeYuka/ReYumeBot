@@ -12,24 +12,32 @@ class TelegramMarkupFactory(
         }
         val encodedStartParam = "join"
 
-        val buttons =
-            mutableListOf(
-                InlineKeyboardButton(
-                    text = "前往机器人验证",
-                    url = "https://t.me/$botUsername?start=$encodedStartParam",
-                )
+        val guideButton =
+            InlineKeyboardButton(
+                text = "前往机器人验证",
+                url = "https://t.me/$botUsername?start=$encodedStartParam",
             )
 
-        if (targetUserId != null) {
-            buttons.add(
-                InlineKeyboardButton(
-                    text = "直接通过",
-                    callbackData = "admin_pass:$targetUserId",
-                )
-            )
+        if (targetUserId == null) {
+            return InlineKeyboardMarkup(inlineKeyboard = listOf(listOf(guideButton)))
         }
 
-        return InlineKeyboardMarkup(inlineKeyboard = listOf(buttons))
+        return InlineKeyboardMarkup(
+            inlineKeyboard =
+                listOf(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "直接通过",
+                            callbackData = "admin_pass:$targetUserId",
+                        ),
+                        InlineKeyboardButton(
+                            text = "封禁",
+                            callbackData = "admin_ban:$targetUserId",
+                        ),
+                    ),
+                    listOf(guideButton),
+                ),
+        )
     }
 
     fun verificationKeyboard(): ReplyKeyboardMarkup? {
