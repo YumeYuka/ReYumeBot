@@ -37,6 +37,23 @@ private const val LOCAL_API_MAX_AUDIO_BYTES = 1900L * 1024 * 1024
 
 private val QUALITY_LEVELS = listOf("hires", "lossless", "higher", "standard")
 private val musicUCookiePattern = Regex("(?:^|;\\s*)MUSIC_U=([^;]+)", RegexOption.IGNORE_CASE)
+private val mainlandIpPrefixes =
+    arrayOf(
+        intArrayOf(113, 0),
+        intArrayOf(113, 64),
+        intArrayOf(113, 128),
+        intArrayOf(114, 214),
+        intArrayOf(118, 122),
+        intArrayOf(119, 112),
+        intArrayOf(211, 161),
+        intArrayOf(221, 238),
+        intArrayOf(116, 224),
+        intArrayOf(222, 128),
+        intArrayOf(183, 128),
+        intArrayOf(116, 128),
+        intArrayOf(101, 226),
+        intArrayOf(61, 128),
+    )
 
 private val shortLinkPattern = Regex("https?://(?:[a-z0-9-]+\\.)?163cn\\.(?:tv|link)/[^\\s<>()]+", RegexOption.IGNORE_CASE)
 private val neteaseUrlPattern = Regex("https?://(?:[a-z0-9-]+\\.)?music\\.163\\.com/[^\\s<>()]+", RegexOption.IGNORE_CASE)
@@ -206,6 +223,13 @@ class NeteaseService(
             httpClient.post(endpoint) {
                 header(HttpHeaders.UserAgent, NETEASE_USER_AGENT)
                 header(HttpHeaders.Cookie, buildCookie())
+                // NetEase returns code=404/message=成功 for requests from some
+                // non-mainland exits. MusicBot-Go uses the same compatibility headers.
+                val spoofedIp = randomMainlandIp()
+                header("X-Real-IP", spoofedIp)
+                header("X-Forwarded-For", spoofedIp)
+                header("HTTP_X_FORWARDED_FOR", spoofedIp)
+                header("CLIENT-IP", spoofedIp)
                 contentType(ContentType.Application.FormUrlEncoded)
                 setBody(eapiParams(path, jsonPayload))
             }
@@ -250,6 +274,11 @@ class NeteaseService(
     private fun randomNmtid(): String {
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         return "00" + buildString(30) { repeat(30) { append(alphabet[Random.nextInt(alphabet.length)]) } }
+    }
+
+    private fun randomMainlandIp(): String {
+        val prefix = mainlandIpPrefixes[Random.nextInt(mainlandIpPrefixes.size)]
+        return "${prefix[0]}.${prefix[1]}.${Random.nextInt(1, 255)}.${Random.nextInt(1, 255)}"
     }
 
     override fun close() {
